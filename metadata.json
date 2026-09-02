@@ -1,0 +1,6 @@
+{
+  "name": "GIS Layer Navigator",
+  "description": "Interactive GIS layer navigation system with administrative boundary inspection and spatial dataset downloads.",
+  "requestFramePermissions": [],
+  "majorCapabilities": ["MAJOR_CAPABILITY_SERVER_SIDE_GEMINI_API"]
+}

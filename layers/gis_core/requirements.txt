@@ -1,0 +1,4 @@
+# Shared runtime dependencies for every GIS function.
+# boto3/botocore are provided by the Lambda runtime — do not vendor them here.
+shapely>=2.0.0,<3.0.0
+pyshp>=2.3.0,<3.0.0

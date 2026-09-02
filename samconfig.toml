@@ -1,0 +1,167 @@
+version = 0.1
+
+# ─────────────────────────────────────────────────────────────────────────────
+# GIS Layer Navigator — SAM CLI configuration
+#
+#   sam build --use-container          # native wheels for arm64 Lambda
+#   sam deploy --config-env dev
+#   sam local start-api --config-env local
+#
+# `--use-container` matters: shapely and pyshp ship compiled wheels, and
+# building them on Windows produces artefacts the Lambda runtime cannot load.
+# ─────────────────────────────────────────────────────────────────────────────
+
+[default]
+[default.global.parameters]
+stack_name = "gis-layer-navigator-dev"
+
+[default.build.parameters]
+use_container = false
+cached = true
+parallel = true
+build_image = "public.ecr.aws/sam/build-python3.12:latest-arm64"
+
+[default.validate.parameters]
+# cfn-lint is bundled with the SAM CLI and its spec lags new Lambda runtimes.
+# Enable this only on SAM CLI >= 1.103, which knows about python3.12.
+lint = false
+
+[default.deploy.parameters]
+capabilities = "CAPABILITY_IAM"
+confirm_changeset = true
+resolve_s3 = true
+region = "ap-south-1"
+s3_prefix = "gis-layer-navigator-dev"
+image_repositories = []
+parameter_overrides = [
+  "Stage=dev",
+  "DataBucketName=gis-layer-navigator-data-980610527749-dev",
+  "DataPrefix=gis",
+  "CorsAllowOrigin=*",
+  "LogRetentionDays=30",
+  "EnableTileCache=true",
+  "EnableProvisionedConcurrency=false",
+]
+
+[default.sync.parameters]
+watch = true
+use_container = false
+
+[default.local_start_api.parameters]
+warm_containers = "EAGER"
+port = 8000
+env_vars = "env.local.json"
+
+[default.local_invoke.parameters]
+env_vars = "env.local.json"
+
+[default.logs.parameters]
+stack_name = "gis-layer-navigator-dev"
+
+[default.delete.parameters]
+no_prompt = false
+
+
+# ─── dev ─────────────────────────────────────────────────────────────────────
+
+[dev]
+[dev.global.parameters]
+stack_name = "gis-layer-navigator-dev"
+
+[dev.build.parameters]
+use_container = false
+cached = true
+parallel = true
+build_image = "public.ecr.aws/sam/build-python3.12:latest-arm64"
+
+[dev.deploy.parameters]
+capabilities = "CAPABILITY_IAM"
+confirm_changeset = true
+resolve_s3 = true
+region = "ap-south-1"
+s3_prefix = "gis-layer-navigator-dev"
+parameter_overrides = [
+  "Stage=dev",
+  "DataBucketName=gis-layer-navigator-data-980610527749-dev",
+  "DataPrefix=gis",
+  "CorsAllowOrigin=*",
+  "LogRetentionDays=14",
+  "EnableTileCache=true",
+  "EnableProvisionedConcurrency=false",
+]
+tags = "Project=\"gis-layer-navigator\" Environment=\"dev\""
+
+
+# ─── staging ─────────────────────────────────────────────────────────────────
+
+[staging]
+[staging.global.parameters]
+stack_name = "gis-layer-navigator-staging"
+
+[staging.build.parameters]
+use_container = false
+cached = true
+parallel = true
+build_image = "public.ecr.aws/sam/build-python3.12:latest-arm64"
+
+[staging.deploy.parameters]
+capabilities = "CAPABILITY_IAM"
+confirm_changeset = true
+resolve_s3 = true
+region = "ap-south-1"
+s3_prefix = "gis-layer-navigator-staging"
+parameter_overrides = [
+  "Stage=staging",
+  "DataPrefix=gis",
+  "CorsAllowOrigin=*",
+  "LogRetentionDays=30",
+  "EnableTileCache=true",
+  "EnableProvisionedConcurrency=false",
+]
+tags = "Project=\"gis-layer-navigator\" Environment=\"staging\""
+
+
+# ─── prod ────────────────────────────────────────────────────────────────────
+
+[prod]
+[prod.global.parameters]
+stack_name = "gis-layer-navigator-prod"
+
+[prod.build.parameters]
+use_container = false
+cached = true
+parallel = true
+build_image = "public.ecr.aws/sam/build-python3.12:latest-arm64"
+
+[prod.deploy.parameters]
+capabilities = "CAPABILITY_IAM"
+# Never auto-apply a changeset in production.
+confirm_changeset = true
+fail_on_empty_changeset = false
+resolve_s3 = true
+region = "ap-south-1"
+s3_prefix = "gis-layer-navigator-prod"
+parameter_overrides = [
+  "Stage=prod",
+  "DataPrefix=gis",
+  # Replace with the real web origin before deploying.
+  "CorsAllowOrigin=https://gis.example.com",
+  "LogRetentionDays=90",
+  "EnableTileCache=true",
+  "EnableProvisionedConcurrency=true",
+]
+tags = "Project=\"gis-layer-navigator\" Environment=\"prod\""
+
+
+# ─── sam local ───────────────────────────────────────────────────────────────
+# Reads GIS data straight from the ./data folder, no S3 involved.
+
+[local]
+[local.local_start_api.parameters]
+warm_containers = "EAGER"
+port = 8000
+env_vars = "env.local.json"
+parameter_overrides = ["Stage=local"]
+
+[local.local_invoke.parameters]
+env_vars = "env.local.json"

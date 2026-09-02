@@ -1,0 +1,3 @@
+# Attached only to AiChatFunction, so the ~30 MB client stays out of the
+# geometry functions' cold-start path.
+google-genai>=0.1.0

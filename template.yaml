@@ -1,0 +1,668 @@
+AWSTemplateFormatVersion: "2010-09-09"
+Transform: AWS::Serverless-2016-10-31
+
+Description: >
+  GIS Layer Navigator — serverless backend.
+  23 endpoints implemented as per-endpoint handlers, deployed across eight
+  Lambda functions behind a REST API Gateway, reading GIS data from S3.
+
+# ─────────────────────────────────────────────────────────────────────────────
+# Parameters
+# ─────────────────────────────────────────────────────────────────────────────
+
+Parameters:
+  Stage:
+    Type: String
+    Default: dev
+    AllowedValues: [dev, staging, prod]
+    Description: Deployment stage; becomes the API Gateway stage name.
+
+  DataBucketName:
+    Type: String
+    Default: ""
+    Description: >
+      Existing S3 bucket holding the GIS data. Leave empty to have the stack
+      create one. Data is never bundled into the deployment package.
+
+  DataPrefix:
+    Type: String
+    Default: gis
+    Description: Key prefix under the data bucket where GIS data is uploaded.
+
+  CorsAllowOrigin:
+    Type: String
+    Default: "*"
+    Description: Value for Access-Control-Allow-Origin. Set to your web origin in prod.
+
+  GeminiSecretArn:
+    Type: String
+    Default: ""
+    Description: >
+      Secrets Manager ARN holding the Gemini API key (plain string, or JSON with
+      a GEMINI_API_KEY field). Leave empty to disable the AI assistant.
+
+  LogRetentionDays:
+    Type: Number
+    Default: 30
+    AllowedValues: [1, 3, 5, 7, 14, 30, 60, 90, 120, 150, 180, 365]
+    Description: CloudWatch Logs retention for every function.
+
+  EnableTileCache:
+    Type: String
+    Default: "true"
+    AllowedValues: ["true", "false"]
+    Description: >
+      Write rendered .pbf tiles back to S3 so repeat requests skip rendering.
+
+  EnableProvisionedConcurrency:
+    Type: String
+    Default: "false"
+    AllowedValues: ["true", "false"]
+    Description: >
+      Keep one warm instance of the latency-sensitive tile and geojson
+      functions. Costs money around the clock; off by default.
+
+Conditions:
+  CreateDataBucket: !Equals [!Ref DataBucketName, ""]
+  HasGeminiSecret: !Not [!Equals [!Ref GeminiSecretArn, ""]]
+  TileCacheOn: !Equals [!Ref EnableTileCache, "true"]
+  WarmPoolOn: !Equals [!Ref EnableProvisionedConcurrency, "true"]
+
+# ─────────────────────────────────────────────────────────────────────────────
+# Globals
+# ─────────────────────────────────────────────────────────────────────────────
+
+Globals:
+  Function:
+    Runtime: python3.14
+    Architectures: [arm64]          # ~20% cheaper per ms than x86_64
+    CodeUri: backend/
+    Timeout: 30
+    MemorySize: 1024
+    Tracing: Active
+    Layers:
+      - !Ref GisCoreLayer
+    Environment:
+      Variables:
+        STAGE: !Ref Stage
+        GIS_DATA_URI: !Sub
+          - "s3://${Bucket}/${DataPrefix}"
+          - Bucket: !If [CreateDataBucket, !Ref GisDataBucket, !Ref DataBucketName]
+        GIS_EXCEL_REF_URI: !Sub
+          - "s3://${Bucket}/${DataPrefix}/final sheet updated on mar21 7.xlsx"
+          - Bucket: !If [CreateDataBucket, !Ref GisDataBucket, !Ref DataBucketName]
+        ARTIFACT_BUCKET: !Ref ArtifactBucket
+        CORS_ALLOW_ORIGIN: !Ref CorsAllowOrigin
+        GIS_LOCAL_CACHE_DIR: /tmp/gis-cache
+        PYTHONPATH: /var/task:/opt/python
+        AWS_LAMBDA_EXEC_WRAPPER: ""
+  Api:
+    OpenApiVersion: 3.0.1
+
+# ─────────────────────────────────────────────────────────────────────────────
+# Storage
+# ─────────────────────────────────────────────────────────────────────────────
+
+Resources:
+
+  GisDataBucket:
+    Type: AWS::S3::Bucket
+    Condition: CreateDataBucket
+    DeletionPolicy: Retain
+    UpdateReplacePolicy: Retain
+    Properties:
+      BucketName: !Sub "gis-layer-navigator-data-${AWS::AccountId}-${Stage}"
+      PublicAccessBlockConfiguration:
+        BlockPublicAcls: true
+        BlockPublicPolicy: true
+        IgnorePublicAcls: true
+        RestrictPublicBuckets: true
+      BucketEncryption:
+        ServerSideEncryptionConfiguration:
+          - ServerSideEncryptionByDefault:
+              SSEAlgorithm: AES256
+      CorsConfiguration:
+        # Lets the browser follow pre-signed redirects for oversized payloads.
+        CorsRules:
+          - AllowedMethods: [GET, HEAD]
+            AllowedOrigins: [!Ref CorsAllowOrigin]
+            AllowedHeaders: ["*"]
+            ExposedHeaders: [Content-Length, Content-Type]
+            MaxAge: 3600
+
+  # Generated artefacts: rendered tiles, and responses too large for API Gateway.
+  ArtifactBucket:
+    Type: AWS::S3::Bucket
+    # Everything here is regenerable from the data bucket.
+    DeletionPolicy: Delete
+    UpdateReplacePolicy: Delete
+    Properties:
+      BucketName: !Sub "gis-layer-navigator-artifacts-${AWS::AccountId}-${Stage}"
+      PublicAccessBlockConfiguration:
+        BlockPublicAcls: true
+        BlockPublicPolicy: true
+        IgnorePublicAcls: true
+        RestrictPublicBuckets: true
+      BucketEncryption:
+        ServerSideEncryptionConfiguration:
+          - ServerSideEncryptionByDefault:
+              SSEAlgorithm: AES256
+      LifecycleConfiguration:
+        Rules:
+          # Offloaded responses are handed out as short-lived pre-signed URLs.
+          - Id: ExpireOffloadedResponses
+            Status: Enabled
+            Prefix: responses/
+            ExpirationInDays: 1
+          - Id: ExpireRenderedTiles
+            Status: Enabled
+            Prefix: tiles/
+            ExpirationInDays: 30
+          - Id: AbortIncompleteUploads
+            Status: Enabled
+            AbortIncompleteMultipartUpload:
+              DaysAfterInitiation: 3
+      CorsConfiguration:
+        CorsRules:
+          - AllowedMethods: [GET, HEAD]
+            AllowedOrigins: [!Ref CorsAllowOrigin]
+            AllowedHeaders: ["*"]
+            ExposedHeaders: [Content-Disposition, Content-Length, Content-Type]
+            MaxAge: 3600
+
+  # ───────────────────────────────────────────────────────────────────────────
+  # Dependency layers
+  # ───────────────────────────────────────────────────────────────────────────
+
+  GisCoreLayer:
+    Type: AWS::Serverless::LayerVersion
+    Metadata:
+      BuildMethod: python3.14
+      BuildArchitecture: arm64
+    Properties:
+      LayerName: !Sub "gis-core-deps-${Stage}"
+      Description: shapely and pyshp — geometry and shapefile I/O.
+      ContentUri: layers/gis_core/
+      CompatibleRuntimes: [python3.14]
+      CompatibleArchitectures: [arm64]
+      RetentionPolicy: Delete
+
+  GisAiLayer:
+    Type: AWS::Serverless::LayerVersion
+    Metadata:
+      BuildMethod: python3.14
+      BuildArchitecture: arm64
+    Properties:
+      LayerName: !Sub "gis-ai-deps-${Stage}"
+      Description: google-genai client, attached only to the AI function.
+      ContentUri: layers/gis_ai/
+      CompatibleRuntimes: [python3.14]
+      CompatibleArchitectures: [arm64]
+      RetentionPolicy: Delete
+
+  # ───────────────────────────────────────────────────────────────────────────
+  # API Gateway
+  # ───────────────────────────────────────────────────────────────────────────
+
+  GisApi:
+    Type: AWS::Serverless::Api
+    Properties:
+      Name: !Sub "gis-layer-navigator-${Stage}"
+      StageName: !Ref Stage
+      TracingEnabled: true
+      # Required so .pbf tiles and .zip/.kmz bundles survive the proxy
+      # integration as base64 rather than being mangled into text.
+      BinaryMediaTypes:
+        - "application/x-protobuf"
+        - "application/octet-stream"
+        - "application/zip"
+        - "application/vnd.google-earth.kmz"
+        - "application/vnd.google-earth.kml+xml"
+        - "application/dxf"
+        - "*~1*"
+      Cors:
+        AllowOrigin: !Sub "'${CorsAllowOrigin}'"
+        AllowHeaders: "'Content-Type,Authorization,X-Amz-Date,X-Api-Key,X-Amz-Security-Token'"
+        AllowMethods: "'GET,POST,OPTIONS'"
+        MaxAge: "'600'"
+      EndpointConfiguration:
+        Type: REGIONAL
+      MethodSettings:
+        - ResourcePath: "/*"
+          HttpMethod: "*"
+          ThrottlingBurstLimit: 400
+          ThrottlingRateLimit: 200
+          MetricsEnabled: true
+
+  # ───────────────────────────────────────────────────────────────────────────
+  # Functions — one per endpoint group, each endpoint its own API resource
+  # ───────────────────────────────────────────────────────────────────────────
+
+  # /api/districts, /api/taluks, /api/villages, /api/parcels,
+  # /api/metadata, /api/search
+  HierarchyFunction:
+    Type: AWS::Serverless::Function
+    Properties:
+      FunctionName: !Sub "gis-hierarchy-${Stage}"
+      Description: Boundary hierarchy navigation, metadata and search.
+      Handler: functions/hierarchy_api/app.lambda_handler
+      MemorySize: 1024
+      Timeout: 29
+      Policies:
+        - !Ref GisDataReadPolicy
+      Events:
+        Districts:
+          Type: Api
+          Properties:
+            RestApiId: !Ref GisApi
+            Path: /api/districts
+            Method: get
+        Taluks:
+          Type: Api
+          Properties:
+            RestApiId: !Ref GisApi
+            Path: /api/taluks
+            Method: get
+        Villages:
+          Type: Api
+          Properties:
+            RestApiId: !Ref GisApi
+            Path: /api/villages
+            Method: get
+        Parcels:
+          Type: Api
+          Properties:
+            RestApiId: !Ref GisApi
+            Path: /api/parcels
+            Method: get
+        Metadata:
+          Type: Api
+          Properties:
+            RestApiId: !Ref GisApi
+            Path: /api/metadata
+            Method: get
+        Search:
+          Type: Api
+          Properties:
+            RestApiId: !Ref GisApi
+            Path: /api/search
+            Method: get
+
+  # /api/cart-layers, /api/cart-layers/list, /api/cart-layer/{layer_id}
+  CartLayersFunction:
+    Type: AWS::Serverless::Function
+    Properties:
+      FunctionName: !Sub "gis-cart-layers-${Stage}"
+      Description: Thematic overlay registry and layer payloads.
+      Handler: functions/cart_api/app.lambda_handler
+      MemorySize: 2048
+      Timeout: 29
+      Policies:
+        - !Ref GisDataReadPolicy
+        - !Ref ArtifactWritePolicy
+      Events:
+        CartLayers:
+          Type: Api
+          Properties:
+            RestApiId: !Ref GisApi
+            Path: /api/cart-layers
+            Method: get
+        CartLayersList:
+          Type: Api
+          Properties:
+            RestApiId: !Ref GisApi
+            Path: /api/cart-layers/list
+            Method: get
+        CartLayer:
+          Type: Api
+          Properties:
+            RestApiId: !Ref GisApi
+            Path: /api/cart-layer/{layer_id}
+            Method: get
+
+  # /api/tiles/{layer_id}/{z}/{x}/{y}.pbf, /api/tiles/{layer_id}/metadata,
+  # /api/fmb-tiles/{z}/{x}/{y}.pbf
+  #
+  # Greedy proxy paths: an API Gateway path parameter must occupy a full
+  # segment, so "{y}.pbf" is not expressible as a template.
+  TilesFunction:
+    Type: AWS::Serverless::Function
+    Properties:
+      FunctionName: !Sub "gis-tiles-${Stage}"
+      Description: Mapbox Vector Tile rendering from pre-built sqlite R-Tree indexes.
+      Handler: functions/tiles_api/app.lambda_handler
+      # Provisioned concurrency requires a published version behind an alias.
+      AutoPublishAlias: live
+      ProvisionedConcurrencyConfig: !If
+        - WarmPoolOn
+        - ProvisionedConcurrentExecutions: 1
+        - !Ref AWS::NoValue
+      MemorySize: 2048
+      Timeout: 29
+      # Tile indexes are mirrored from S3 into /tmp; the largest is ~170 MB.
+      EphemeralStorage:
+        Size: 4096
+      Environment:
+        Variables:
+          GIS_LOCAL_CACHE_BUDGET_MB: 3072
+          GIS_TILE_CACHE_URI: !If
+            - TileCacheOn
+            - !Sub "s3://${ArtifactBucket}/tiles"
+            - ""
+      Policies:
+        - !Ref GisDataReadPolicy
+        - !Ref ArtifactWritePolicy
+      Events:
+        VectorTiles:
+          Type: Api
+          Properties:
+            RestApiId: !Ref GisApi
+            Path: /api/tiles/{proxy+}
+            Method: get
+        FmbTiles:
+          Type: Api
+          Properties:
+            RestApiId: !Ref GisApi
+            Path: /api/fmb-tiles/{proxy+}
+            Method: get
+
+  # /api/spatial/resolve, /api/spatial/viewport
+  SpatialFunction:
+    Type: AWS::Serverless::Function
+    Properties:
+      FunctionName: !Sub "gis-spatial-${Stage}"
+      Description: Point-in-polygon and viewport resolution across the hierarchy.
+      Handler: functions/spatial_api/app.lambda_handler
+      MemorySize: 3008
+      Timeout: 29
+      EphemeralStorage:
+        Size: 2048
+      Policies:
+        - !Ref GisDataReadPolicy
+        - !Ref ArtifactWritePolicy
+      Events:
+        Resolve:
+          Type: Api
+          Properties:
+            RestApiId: !Ref GisApi
+            Path: /api/spatial/resolve
+            Method: get
+        Viewport:
+          Type: Api
+          Properties:
+            RestApiId: !Ref GisApi
+            Path: /api/spatial/viewport
+            Method: get
+
+  # /api/spatial/clip/preview, /api/spatial/clip/download
+  ClipFunction:
+    Type: AWS::Serverless::Function
+    Properties:
+      FunctionName: !Sub "gis-spatial-clip-${Stage}"
+      Description: Polygon clipping preview and multi-layer bundle export.
+      Handler: functions/clip_api/app.lambda_handler
+      # Clipping loads whole overlays into memory and runs shapely intersections.
+      MemorySize: 3008
+      Timeout: 300
+      EphemeralStorage:
+        Size: 4096
+      Policies:
+        - !Ref GisDataReadPolicy
+        - !Ref ArtifactWritePolicy
+      Events:
+        ClipPreview:
+          Type: Api
+          Properties:
+            RestApiId: !Ref GisApi
+            Path: /api/spatial/clip/preview
+            Method: post
+        ClipDownload:
+          Type: Api
+          Properties:
+            RestApiId: !Ref GisApi
+            Path: /api/spatial/clip/download
+            Method: post
+
+  # /api/geojson, /api/auto-zoom-layer
+  GeoJsonFunction:
+    Type: AWS::Serverless::Function
+    Properties:
+      FunctionName: !Sub "gis-geojson-${Stage}"
+      Description: Merged boundary GeoJSON and zoom-driven background layers.
+      Handler: functions/geojson_api/app.lambda_handler
+      # Provisioned concurrency requires a published version behind an alias.
+      AutoPublishAlias: live
+      ProvisionedConcurrencyConfig: !If
+        - WarmPoolOn
+        - ProvisionedConcurrentExecutions: 1
+        - !Ref AWS::NoValue
+      MemorySize: 3008
+      Timeout: 60
+      EphemeralStorage:
+        Size: 2048
+      Policies:
+        - !Ref GisDataReadPolicy
+        - !Ref ArtifactWritePolicy
+      Events:
+        GeoJson:
+          Type: Api
+          Properties:
+            RestApiId: !Ref GisApi
+            Path: /api/geojson
+            Method: get
+        AutoZoomLayer:
+          Type: Api
+          Properties:
+            RestApiId: !Ref GisApi
+            Path: /api/auto-zoom-layer
+            Method: get
+
+  # /api/export, /api/download-zip, /api/download/{level}/{code}, /api/export-polygon
+  ExportFunction:
+    Type: AWS::Serverless::Function
+    Properties:
+      FunctionName: !Sub "gis-export-${Stage}"
+      Description: Shapefile, GeoJSON, KML, KMZ and DXF export bundles.
+      Handler: functions/export_api/app.lambda_handler
+      MemorySize: 3008
+      Timeout: 300
+      EphemeralStorage:
+        Size: 4096
+      Policies:
+        - !Ref GisDataReadPolicy
+        - !Ref ArtifactWritePolicy
+      Events:
+        Export:
+          Type: Api
+          Properties:
+            RestApiId: !Ref GisApi
+            Path: /api/export
+            Method: get
+        DownloadZip:
+          Type: Api
+          Properties:
+            RestApiId: !Ref GisApi
+            Path: /api/download-zip
+            Method: get
+        DownloadDirect:
+          Type: Api
+          Properties:
+            RestApiId: !Ref GisApi
+            Path: /api/download/{proxy+}
+            Method: get
+        ExportPolygon:
+          Type: Api
+          Properties:
+            RestApiId: !Ref GisApi
+            Path: /api/export-polygon
+            Method: post
+
+  # /api/ai/chat
+  AiChatFunction:
+    Type: AWS::Serverless::Function
+    Properties:
+      FunctionName: !Sub "gis-ai-chat-${Stage}"
+      Description: Gemini-backed GIS assistant.
+      Handler: functions/ai_api/app.lambda_handler
+      MemorySize: 512
+      Timeout: 60
+      Layers:
+        # Appended to the global GisCoreLayer rather than replacing it.
+        - !Ref GisAiLayer
+      Environment:
+        Variables:
+          GEMINI_SECRET_ARN: !Ref GeminiSecretArn
+          GEMINI_MODEL: gemini-2.5-flash
+      Policies:
+        - !If
+          - HasGeminiSecret
+          - Statement:
+              - Effect: Allow
+                Action: secretsmanager:GetSecretValue
+                Resource: !Ref GeminiSecretArn
+          - !Ref AWS::NoValue
+      Events:
+        AiChat:
+          Type: Api
+          Properties:
+            RestApiId: !Ref GisApi
+            Path: /api/ai/chat
+            Method: post
+
+  # ───────────────────────────────────────────────────────────────────────────
+  # IAM — least privilege, scoped to the two buckets
+  # ───────────────────────────────────────────────────────────────────────────
+
+  GisDataReadPolicy:
+    Type: AWS::IAM::ManagedPolicy
+    Properties:
+      Description: Read-only access to the GIS data bucket.
+      PolicyDocument:
+        Version: "2012-10-17"
+        Statement:
+          - Effect: Allow
+            Action: [s3:GetObject, s3:GetObjectVersion]
+            Resource: !Sub
+              - "arn:${AWS::Partition}:s3:::${Bucket}/*"
+              - Bucket: !If [CreateDataBucket, !Ref GisDataBucket, !Ref DataBucketName]
+          - Effect: Allow
+            Action: [s3:ListBucket, s3:GetBucketLocation]
+            Resource: !Sub
+              - "arn:${AWS::Partition}:s3:::${Bucket}"
+              - Bucket: !If [CreateDataBucket, !Ref GisDataBucket, !Ref DataBucketName]
+
+  ArtifactWritePolicy:
+    Type: AWS::IAM::ManagedPolicy
+    Properties:
+      Description: Read/write access to the generated artifact bucket.
+      PolicyDocument:
+        Version: "2012-10-17"
+        Statement:
+          - Effect: Allow
+            Action: [s3:GetObject, s3:PutObject, s3:DeleteObject]
+            Resource: !Sub "arn:${AWS::Partition}:s3:::${ArtifactBucket}/*"
+          - Effect: Allow
+            Action: [s3:ListBucket]
+            Resource: !Sub "arn:${AWS::Partition}:s3:::${ArtifactBucket}"
+
+  # ───────────────────────────────────────────────────────────────────────────
+  # Log groups — declared so retention is managed rather than never-expiring
+  # ───────────────────────────────────────────────────────────────────────────
+
+  HierarchyLogGroup:
+    Type: AWS::Logs::LogGroup
+    DeletionPolicy: Delete
+    UpdateReplacePolicy: Delete
+    Properties:
+      LogGroupName: !Sub "/aws/lambda/gis-hierarchy-${Stage}"
+      RetentionInDays: !Ref LogRetentionDays
+
+  CartLayersLogGroup:
+    Type: AWS::Logs::LogGroup
+    DeletionPolicy: Delete
+    UpdateReplacePolicy: Delete
+    Properties:
+      LogGroupName: !Sub "/aws/lambda/gis-cart-layers-${Stage}"
+      RetentionInDays: !Ref LogRetentionDays
+
+  TilesLogGroup:
+    Type: AWS::Logs::LogGroup
+    DeletionPolicy: Delete
+    UpdateReplacePolicy: Delete
+    Properties:
+      LogGroupName: !Sub "/aws/lambda/gis-tiles-${Stage}"
+      RetentionInDays: !Ref LogRetentionDays
+
+  SpatialLogGroup:
+    Type: AWS::Logs::LogGroup
+    DeletionPolicy: Delete
+    UpdateReplacePolicy: Delete
+    Properties:
+      LogGroupName: !Sub "/aws/lambda/gis-spatial-${Stage}"
+      RetentionInDays: !Ref LogRetentionDays
+
+  ClipLogGroup:
+    Type: AWS::Logs::LogGroup
+    DeletionPolicy: Delete
+    UpdateReplacePolicy: Delete
+    Properties:
+      LogGroupName: !Sub "/aws/lambda/gis-spatial-clip-${Stage}"
+      RetentionInDays: !Ref LogRetentionDays
+
+  GeoJsonLogGroup:
+    Type: AWS::Logs::LogGroup
+    DeletionPolicy: Delete
+    UpdateReplacePolicy: Delete
+    Properties:
+      LogGroupName: !Sub "/aws/lambda/gis-geojson-${Stage}"
+      RetentionInDays: !Ref LogRetentionDays
+
+  ExportLogGroup:
+    Type: AWS::Logs::LogGroup
+    DeletionPolicy: Delete
+    UpdateReplacePolicy: Delete
+    Properties:
+      LogGroupName: !Sub "/aws/lambda/gis-export-${Stage}"
+      RetentionInDays: !Ref LogRetentionDays
+
+  AiChatLogGroup:
+    Type: AWS::Logs::LogGroup
+    DeletionPolicy: Delete
+    UpdateReplacePolicy: Delete
+    Properties:
+      LogGroupName: !Sub "/aws/lambda/gis-ai-chat-${Stage}"
+      RetentionInDays: !Ref LogRetentionDays
+
+# ─────────────────────────────────────────────────────────────────────────────
+# Outputs
+# ─────────────────────────────────────────────────────────────────────────────
+
+Outputs:
+  ApiBaseUrl:
+    Description: Base URL for the API. Point the frontend's /api proxy here.
+    Value: !Sub "https://${GisApi}.execute-api.${AWS::Region}.amazonaws.com/${Stage}"
+    Export:
+      Name: !Sub "${AWS::StackName}-ApiBaseUrl"
+
+  DataBucket:
+    Description: Bucket holding the GIS data. Upload with scripts/sync_data_to_s3.py.
+    Value: !If [CreateDataBucket, !Ref GisDataBucket, !Ref DataBucketName]
+    Export:
+      Name: !Sub "${AWS::StackName}-DataBucket"
+
+  DataUri:
+    Description: Root URI the functions read GIS data from.
+    Value: !Sub
+      - "s3://${Bucket}/${DataPrefix}"
+      - Bucket: !If [CreateDataBucket, !Ref GisDataBucket, !Ref DataBucketName]
+
+  ArtifactBucketName:
+    Description: Bucket for rendered tiles and offloaded large responses.
+    Value: !Ref ArtifactBucket
+
+  FunctionNames:
+    Description: The eight deployed functions.
+    Value: !Sub >-
+      ${HierarchyFunction}, ${CartLayersFunction}, ${TilesFunction},
+      ${SpatialFunction}, ${ClipFunction}, ${GeoJsonFunction},
+      ${ExportFunction}, ${AiChatFunction}

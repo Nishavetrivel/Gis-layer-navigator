@@ -1,0 +1,24 @@
+node_modules/
+build/
+dist/
+dist.zip
+*.zip
+coverage/
+.DS_Store
+*.log
+.env
+.env.local
+!.env.example
+
+# Heavy local GIS data (all stored on S3)
+data/
+*.sqlite*
+*.shp
+*.dbf
+*.shx
+*.geojson
+
+# SAM build artefacts
+.aws-sam/
+samconfig.local.toml
+
