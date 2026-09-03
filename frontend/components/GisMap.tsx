@@ -820,13 +820,14 @@ export const GisMap: React.FC<GisMapProps> = ({
         'source-street-view': {
           type: 'raster',
           tiles: [
-            'https://a.tile.openstreetmap.org/{z}/{x}/{y}.png',
-            'https://b.tile.openstreetmap.org/{z}/{x}/{y}.png',
-            'https://c.tile.openstreetmap.org/{z}/{x}/{y}.png',
+            'https://mt0.google.com/vt/lyrs=m&x={x}&y={y}&z={z}',
+            'https://mt1.google.com/vt/lyrs=m&x={x}&y={y}&z={z}',
+            'https://mt2.google.com/vt/lyrs=m&x={x}&y={y}&z={z}',
+            'https://mt3.google.com/vt/lyrs=m&x={x}&y={y}&z={z}',
           ],
           tileSize: 256,
-          maxzoom: 19,
-          attribution: '© OpenStreetMap contributors',
+          maxzoom: 20,
+          attribution: '© Google Maps',
         },
         'source-google-hybrid': {
           type: 'raster',
@@ -837,25 +838,25 @@ export const GisMap: React.FC<GisMapProps> = ({
             'https://mt3.google.com/vt/lyrs=y&x={x}&y={y}&z={z}',
           ],
           tileSize: 256,
-          maxzoom: 19,
+          maxzoom: 20,
           attribution: '© Google Maps',
         },
         'source-esri-satellite': {
           type: 'raster',
           tiles: [
-            'https://services.arcgisonline.com/ArcGIS/rest/services/World_Imagery/MapServer/tile/{z}/{y}/{x}',
+            'https://server.arcgisonline.com/ArcGIS/rest/services/World_Imagery/MapServer/tile/{z}/{y}/{x}',
           ],
           tileSize: 256,
-          maxzoom: 18,
+          maxzoom: 19,
           attribution: 'Esri, Maxar, Earthstar Geographics',
         },
         'source-esri-topo': {
           type: 'raster',
           tiles: [
-            'https://services.arcgisonline.com/ArcGIS/rest/services/World_Topo_Map/MapServer/tile/{z}/{y}/{x}',
+            'https://server.arcgisonline.com/ArcGIS/rest/services/World_Topo_Map/MapServer/tile/{z}/{y}/{x}',
           ],
           tileSize: 256,
-          maxzoom: 18,
+          maxzoom: 19,
           attribution: 'Esri, HERE, Garmin',
         },
         'district-source': { type: 'geojson', data: { type: 'FeatureCollection', features: [] } },
@@ -3465,7 +3466,14 @@ ${kmlFeatures}
                 return (
                   <button
                     key={opt.key}
-                    onClick={() => { onBasemapChange(opt.key); setDropdownOpen(false); }}
+                    type="button"
+                    onClick={() => {
+                      onBasemapChange(opt.key);
+                      if (mapRef.current) {
+                        applyBasemapVisibility(mapRef.current, opt.key);
+                      }
+                      setDropdownOpen(false);
+                    }}
                     className={`w-full text-left px-2.5 py-1.5 rounded-lg text-xs font-medium transition-colors flex items-center justify-between cursor-pointer ${
                       isSelected
                         ? 'bg-sky-50 dark:bg-sky-600/30 text-sky-700 dark:text-sky-300 font-bold border border-sky-200 dark:border-sky-600/40'

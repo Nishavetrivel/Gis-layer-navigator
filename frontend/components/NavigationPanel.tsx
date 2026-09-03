@@ -687,8 +687,8 @@ const SearchableSelect: React.FC<SearchableSelectProps> = ({
         </div>
       )}
 
-      {/* Sleek & Elegant Layer Opacity Control Slider */}
-      {(Boolean(selectedCode) || (multiSelectedCodes && multiSelectedCodes.length > 0) || Boolean(activeLayer?.code)) && onChangeOpacity && activeLayer && (
+      {/* Sleek & Elegant Layer Opacity Control Slider (Parcel Level Only) */}
+      {level === 'parcel' && (Boolean(selectedCode) || (multiSelectedCodes && multiSelectedCodes.length > 0) || Boolean(activeLayer?.code)) && onChangeOpacity && activeLayer && (
         <div className="mt-1.5 flex items-center justify-between gap-2.5 px-3 py-1.5 bg-slate-100/70 dark:bg-slate-800/60 rounded-xl border border-slate-200/80 dark:border-slate-700/80 shadow-2xs">
           <div className="flex items-center gap-1.5 shrink-0">
             <Sliders className="w-3 h-3 text-sky-600 dark:text-sky-400 stroke-[2.3]" />
