@@ -34,7 +34,12 @@ ESSENTIAL_KEYS = {
     'water_body_name', 'tourist_point_name', 'sector', 'sec_code', 'icds_code',
     'd_name', 'dist_name', 'taluk_name', 'block_name', 'panchayat_village',
     'tasmac_sho', 'full_addre', 'road_nam', 'road_num', 'nh_name', 'nh_no',
-    'mineral_le', 'feature_na', 'length_km', 'district_name'
+    'mineral_le', 'feature_na', 'length_km', 'district_name',
+    'discr_l1', 'discr_l2', 'descriptio', 'length', 'wl_river_i',
+    'road_code', 'all_rcode', 'road_category', 'other_road_length', 'road_id',
+    'customer_agency', 'sales_office', 'ro_market', 'tourist_point_id',
+    'revenue_village', 'source_department', 'owner_department',
+    'pin_code', 'ward_no', 'zone_no', 'circle_nam', 'divn_nam', 'subdvn_nam'
 }
 
 # ─── PROTOBUF & MVT ENCODER ──────────────────────────────────────────────────

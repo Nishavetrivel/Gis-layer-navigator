@@ -109,3 +109,33 @@ input[type="range"]::-moz-range-thumb {
   border-right-color: rgba(15, 23, 42, 0.95) !important;
 }
 
+/* MapLibre Scale Control - Sleek Glassmorphism & Overlap Prevention */
+.maplibregl-ctrl-bottom-left {
+  bottom: 8px !important;
+  left: 12px !important;
+  margin: 0 !important;
+  z-index: 25 !important;
+  transition: left 0.3s cubic-bezier(0.4, 0, 0.2, 1), bottom 0.3s ease !important;
+}
+
+@media (min-width: 640px) {
+  .search-panel-open .maplibregl-ctrl-bottom-left {
+    left: 350px !important;
+  }
+}
+
+.maplibregl-ctrl-scale {
+  background-color: rgba(15, 23, 42, 0.85) !important;
+  color: #f8fafc !important;
+  border: 1.5px solid rgba(56, 189, 248, 0.6) !important;
+  border-top: none !important;
+  border-radius: 0 0 4px 4px !important;
+  font-size: 10px !important;
+  font-weight: 700 !important;
+  font-family: ui-monospace, SFMono-Regular, Menlo, Monaco, Consolas, monospace !important;
+  padding: 1px 6px !important;
+  backdrop-filter: blur(8px) !important;
+  box-shadow: 0 4px 12px rgba(0, 0, 0, 0.3) !important;
+}
+
+

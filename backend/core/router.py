@@ -76,19 +76,20 @@ class Router:
         return self.add("POST", template, handler)
 
     def resolve(self, request: Request) -> Tuple[Handler, Dict[str, str]]:
+        lookup_method = "GET" if request.method == "HEAD" else request.method
         # 1. Exact API Gateway resource template — unambiguous when present.
         resource = request.event.get("resource") or (
             (request.event.get("requestContext") or {}).get("resourcePath")
         )
         if resource:
             for route in self.routes:
-                if route.template == resource and route.method == request.method:
+                if route.template == resource and route.method == lookup_method:
                     return route.handler, dict(request.path_params or {})
 
         # 2. Fall back to matching the concrete path (sam local / dev server).
         path = _strip_stage(request)
         for route in self.routes:
-            params = route.match(request.method, path)
+            params = route.match(lookup_method, path)
             if params is not None:
                 return route.handler, params
 

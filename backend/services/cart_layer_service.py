@@ -14,7 +14,7 @@ CART_LAYER_DEFINITIONS: List[Dict[str, Any]] = [
         "name": "generic_viewer_all_water_bodies",
         "title": "generic_viewer_all_water_bodies",
         "geom_type": "polygon",
-        "color": "#d64a78",
+        "color": "#0284c7",
         "clustered": False,
         "symbol": "polygon",
         "opacity": 0.55

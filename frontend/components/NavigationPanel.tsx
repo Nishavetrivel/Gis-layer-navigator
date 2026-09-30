@@ -1,7 +1,9 @@
 import React, { useState, useRef, useEffect, useMemo } from 'react';
 import { DistrictItem, TalukItem, VillageItem, ParcelItem, GisLevel, SearchResult, ActiveGisLayer } from '../types';
-import { ArrowLeft, RefreshCw, ChevronDown, CheckCircle2, X, Type, Hash, Layers, Eye, EyeOff, Maximize2, Tag, Building2, Compass, Home, FileSpreadsheet, PanelLeftClose, Sun, Moon, Sliders } from 'lucide-react';
+import { ArrowLeft, RefreshCw, ChevronDown, CheckCircle2, X, Type, Hash, Layers, Eye, EyeOff, Maximize2, Tag, Building2, Compass, Home, FileSpreadsheet, PanelLeftClose, Sun, Moon, Sliders, Loader2, Sparkles } from 'lucide-react';
 import { SearchBar } from './SearchBar';
+import { apiUrl, API_BASE } from '@/frontend/lib/api';
+import { MULTI_SELECTION_PALETTE } from '../utils/colorUtils';
 
 interface SearchableSelectOption {
   code: string;
@@ -24,6 +26,7 @@ interface SearchableSelectProps {
   options: SearchableSelectOption[];
   selectedCode: string;
   onSelect: (code: string) => void;
+  onSearchResultSelect?: (result: SearchResult) => void;
   mode: 'name' | 'code';
   disabled?: boolean;
   disabledMessage?: string;
@@ -227,6 +230,7 @@ const SearchableSelect: React.FC<SearchableSelectProps> = ({
   options,
   selectedCode,
   onSelect,
+  onSearchResultSelect,
   mode,
   disabled = false,
   disabledMessage,
@@ -243,14 +247,21 @@ const SearchableSelect: React.FC<SearchableSelectProps> = ({
   const containerRef = useRef<HTMLDivElement>(null);
   const selectedItemRef = useRef<HTMLButtonElement | null>(null);
 
+  const [remoteResults, setRemoteResults] = useState<SearchResult[]>([]);
+  const [loadingRemote, setLoadingRemote] = useState(false);
+
   const selectedOption = options.find(
     (opt) => opt.code === selectedCode || opt.code === selectedCode.split('_').pop()
   );
 
-  // Auto-scroll dropdown list to currently selected item when opened
+  // Auto-scroll dropdown list to currently selected item or container when opened
   useEffect(() => {
-    if (isOpen && selectedItemRef.current) {
-      selectedItemRef.current.scrollIntoView({ block: 'nearest', behavior: 'smooth' });
+    if (isOpen) {
+      if (selectedItemRef.current) {
+        selectedItemRef.current.scrollIntoView({ block: 'nearest', behavior: 'smooth' });
+      } else if (containerRef.current) {
+        containerRef.current.scrollIntoView({ block: 'nearest', behavior: 'smooth' });
+      }
     }
   }, [isOpen]);
 
@@ -263,6 +274,9 @@ const SearchableSelect: React.FC<SearchableSelectProps> = ({
       setQuery(names.length > 0 ? names.join(', ') : `${multiSelectedCodes.length} selected`);
     } else if (selectedOption) {
       setQuery(mode === 'name' ? selectedOption.name : selectedOption.code);
+    } else if (selectedCode) {
+      const clean = selectedCode.includes('_') ? selectedCode.split('_').pop()! : selectedCode;
+      setQuery(clean);
     } else if (!selectedCode && (!multiSelectedCodes || multiSelectedCodes.length === 0)) {
       setQuery('');
       setIsOpen(false);
@@ -286,6 +300,35 @@ const SearchableSelect: React.FC<SearchableSelectProps> = ({
     document.addEventListener('mousedown', handleClickOutside);
     return () => document.removeEventListener('mousedown', handleClickOutside);
   }, []);
+
+  // Remote statewide search fallback when options are empty or when query is typed
+  useEffect(() => {
+    const trimmed = query.trim();
+    if (!trimmed || (selectedOption && trimmed.toLowerCase() === (mode === 'name' ? selectedOption.name : selectedOption.code).toLowerCase())) {
+      setRemoteResults([]);
+      return;
+    }
+
+    if (options.length === 0 || trimmed.length >= 2) {
+      const timer = setTimeout(async () => {
+        setLoadingRemote(true);
+        try {
+          const res = await fetch(apiUrl(`/api/search?q=${encodeURIComponent(trimmed)}&level=${level}&limit=25`));
+          const json = await res.json();
+          if (json.success) {
+            setRemoteResults(json.data || []);
+          }
+        } catch (e) {
+          console.error('Remote search error in select:', e);
+        } finally {
+          setLoadingRemote(false);
+        }
+      }, 150);
+      return () => clearTimeout(timer);
+    } else {
+      setRemoteResults([]);
+    }
+  }, [query, options.length, level, selectedOption, mode]);
 
   const filteredOptions = useMemo(() => {
     const currentVal = selectedOption ? (mode === 'name' ? selectedOption.name : selectedOption.code) : '';
@@ -530,7 +573,7 @@ const SearchableSelect: React.FC<SearchableSelectProps> = ({
       </label>
 
       {disabled ? (
-        <div className="bg-slate-100/70 dark:bg-slate-800/40 border border-slate-200/80 dark:border-slate-800 rounded-xl px-3 py-2 text-slate-400 dark:text-slate-500 text-xs italic flex items-center justify-between cursor-not-allowed select-none">
+        <div className="bg-slate-100/70 dark:bg-slate-800/40 border border-cyan-300/80 dark:border-cyan-600/60 rounded-xl px-3 py-2 text-slate-400 dark:text-slate-500 text-xs italic flex items-center justify-between cursor-not-allowed select-none shadow-sm">
           <span className="truncate">{disabledMessage || `Select parent level first`}</span>
         </div>
       ) : (
@@ -562,7 +605,7 @@ const SearchableSelect: React.FC<SearchableSelectProps> = ({
             }}
             onClick={() => setIsOpen(true)}
             placeholder={loading ? 'Loading records...' : (placeholder || `Select ${label}...`)}
-            className={`w-full bg-slate-50/90 dark:bg-slate-800/80 border border-slate-200 dark:border-slate-700/90 text-slate-800 dark:text-slate-100 text-xs font-semibold rounded-xl pl-3 pr-14 py-2 shadow-2xs focus:outline-none focus:ring-2 focus:bg-white dark:focus:bg-slate-900 transition-all placeholder:text-slate-400 dark:placeholder:text-slate-500 font-sans cursor-text ${levelConfig.activeRing}`}
+            className="w-full bg-slate-50/90 dark:bg-slate-800/80 border border-slate-200 dark:border-slate-700 text-slate-800 dark:text-slate-100 text-xs font-semibold rounded-xl pl-3 pr-14 py-2 shadow-xs focus:outline-none focus:ring-2 focus:ring-sky-500/20 focus:border-sky-500 dark:focus:border-sky-400 focus:bg-white dark:focus:bg-slate-900 transition-all placeholder:text-slate-400 dark:placeholder:text-slate-500 font-sans cursor-text"
           />
 
           {/* Input trailing actions: Clear (X) + Dropdown Toggle (Chevron) */}
@@ -595,17 +638,15 @@ const SearchableSelect: React.FC<SearchableSelectProps> = ({
             </button>
           </div>
 
-          {/* Suggestions Dropdown (Always opens below) */}
+          {/* Suggestions Dropdown (Opens upward for parcel to prevent screen overlap) */}
           {isOpen && (
             <div
-              className="absolute left-0 right-0 top-full mt-1.5 max-h-60 bg-white dark:bg-slate-900 border border-slate-200 dark:border-slate-700 rounded-2xl shadow-2xl z-50 p-1 flex flex-col animate-in fade-in slide-in-from-top-1 duration-150"
+              className={`absolute left-0 min-w-full w-[340px] max-w-[420px] ${
+                level === 'parcel' ? 'bottom-full mb-1.5 slide-in-from-bottom-1' : 'top-full mt-1.5 slide-in-from-top-1'
+              } max-h-72 bg-white dark:bg-slate-900 border border-slate-200 dark:border-slate-700/80 rounded-2xl shadow-2xl z-50 p-1 flex flex-col animate-in fade-in duration-150`}
             >
-              <div className="flex-1 overflow-y-auto max-h-44 p-0.5 space-y-0.5 scroll-smooth">
-                {filteredOptions.length === 0 ? (
-                  <div className="p-4 text-center text-xs text-slate-400 dark:text-slate-500 font-medium">
-                    No matching items found
-                  </div>
-                ) : (
+              <div className="flex-1 overflow-y-auto max-h-56 p-0.5 space-y-0.5 scroll-smooth">
+                {filteredOptions.length > 0 && (
                   filteredOptions.map((opt) => {
                     const isInBasket = Boolean(
                       multiSelectedCodes &&
@@ -615,6 +656,11 @@ const SearchableSelect: React.FC<SearchableSelectProps> = ({
                     const isSelectedSingle = opt.code === selectedCode;
                     const isChecked = (multiSelectedCodes && multiSelectedCodes.length > 0) ? isInBasket : isSelectedSingle;
 
+                    const colorIndex = multiSelectedCodes ? multiSelectedCodes.findIndex(
+                      (c) => c === opt.code || (opt.code.includes('_') && c === opt.code.split('_').pop())
+                    ) : -1;
+                    const badgeColor = colorIndex >= 0 ? MULTI_SELECTION_PALETTE[colorIndex % MULTI_SELECTION_PALETTE.length] : undefined;
+
                     return (
                       <button
                         key={opt.code}
@@ -623,6 +669,9 @@ const SearchableSelect: React.FC<SearchableSelectProps> = ({
                         onClick={() => {
                           if (onMultiSelect) {
                             onMultiSelect(opt.code);
+                            if (onZoomToLayer && level) {
+                              onZoomToLayer(level);
+                            }
                           } else {
                             onSelect(opt.code);
                             setQuery(mode === 'name' ? opt.name : opt.code);
@@ -634,22 +683,27 @@ const SearchableSelect: React.FC<SearchableSelectProps> = ({
                         }}
                         className={`w-full text-left px-3 py-2 text-xs rounded-xl transition-all flex items-center justify-between cursor-pointer ${
                           isChecked
-                            ? 'bg-gradient-to-r from-sky-500/15 to-cyan-500/15 text-sky-800 dark:text-sky-200 font-bold border border-sky-300 dark:border-sky-700/80 shadow-2xs'
+                            ? 'bg-sky-500/10 text-sky-900 dark:text-sky-200 font-bold border border-sky-300 dark:border-sky-700/80 shadow-2xs'
                             : 'text-slate-700 dark:text-slate-200 hover:bg-slate-100/80 dark:hover:bg-slate-800 hover:text-slate-900 dark:hover:text-white'
                         }`}
                       >
-                        <div className="flex items-center gap-2 min-w-0 flex-1">
-                          {isChecked ? (
-                            <Eye className="w-3.5 h-3.5 text-sky-600 dark:text-sky-400 shrink-0" />
-                          ) : (
-                            <Eye className="w-3.5 h-3.5 text-slate-400 opacity-60 shrink-0" />
-                          )}
-                          <span className={`truncate ${isChecked ? 'font-black text-sky-700 dark:text-sky-300' : 'font-semibold'}`}>
+                        <div className="flex items-center gap-2.5 min-w-0 flex-1">
+                          <div
+                            className={`w-4 h-4 rounded-md flex items-center justify-center border transition-all shrink-0 ${
+                              isChecked
+                                ? 'bg-sky-600 border-sky-600 text-white shadow-xs'
+                                : 'border-slate-300 dark:border-slate-600 bg-white dark:bg-slate-800'
+                            }`}
+                            style={badgeColor ? { backgroundColor: badgeColor, borderColor: badgeColor } : undefined}
+                          >
+                            {isChecked && <CheckCircle2 className="w-3 h-3 text-white stroke-[2.5]" />}
+                          </div>
+                          <span className={`text-[12px] leading-snug ${isChecked ? 'font-black text-sky-700 dark:text-sky-300' : 'font-semibold text-slate-800 dark:text-slate-100'} break-words line-clamp-2`}>
                             {mode === 'name' ? opt.name : opt.code}
                           </span>
                         </div>
                         <div className="flex items-center gap-1.5 ml-2 shrink-0">
-                          <span className="text-[9.5px] font-mono font-medium text-slate-400 dark:text-slate-500 bg-slate-100 dark:bg-slate-800 px-1.5 py-0.5 rounded">
+                          <span className="text-[9.5px] font-mono font-medium text-slate-500 dark:text-slate-400 bg-slate-100 dark:bg-slate-800 px-1.5 py-0.5 rounded">
                             {mode === 'name' ? opt.code : opt.name}
                           </span>
                         </div>
@@ -657,11 +711,73 @@ const SearchableSelect: React.FC<SearchableSelectProps> = ({
                     );
                   })
                 )}
+
+                {/* Remote Statewide Search Results */}
+                {remoteResults.length > 0 && (
+                  <div className={filteredOptions.length > 0 ? "pt-1 mt-1 border-t border-slate-100 dark:border-slate-800" : ""}>
+                    <div className="px-2 py-1 text-[9px] font-black uppercase text-sky-600 dark:text-sky-400 flex items-center gap-1">
+                      <Sparkles className="w-2.5 h-2.5 text-amber-500" />
+                      Statewide Results ({remoteResults.length})
+                    </div>
+                    {remoteResults.map((r, idx) => (
+                      <button
+                        key={`remote-${r.code}-${idx}`}
+                        type="button"
+                        onClick={() => {
+                          if (onSearchResultSelect) {
+                            onSearchResultSelect(r);
+                          } else {
+                            onSelect(r.code);
+                          }
+                          setQuery(mode === 'name' ? r.name : r.code);
+                          if (onZoomToLayer && level) {
+                            onZoomToLayer(level);
+                          }
+                          setIsOpen(false);
+                        }}
+                        className="w-full text-left px-3 py-2 rounded-xl text-xs hover:bg-slate-100/80 dark:hover:bg-slate-800 transition-colors flex items-start justify-between cursor-pointer group"
+                      >
+                        <div className="flex flex-col min-w-0 flex-1 py-0.5">
+                          <div className="flex items-center justify-between gap-2">
+                            <span className="font-bold text-[12px] text-slate-800 dark:text-slate-100 leading-snug break-words">
+                              {r.name}
+                            </span>
+                            <span className="text-[9px] font-mono text-slate-500 dark:text-slate-400 bg-slate-100 dark:bg-slate-800 px-1.5 py-0.5 rounded shrink-0">
+                              {r.code}
+                            </span>
+                          </div>
+                          {(r.location_text || r.district_name) && (
+                            <span className="text-[10.5px] text-slate-400 dark:text-slate-500 truncate mt-0.5">
+                              {r.location_text || `${r.district_name || ''} ${r.taluk_name ? '• ' + r.taluk_name : ''}`}
+                            </span>
+                          )}
+                        </div>
+                      </button>
+                    ))}
+                  </div>
+                )}
+
+                {/* Remote Search In Progress */}
+                {loadingRemote && (
+                  <div className="p-3 text-center text-xs text-sky-600 dark:text-sky-400 flex items-center justify-center gap-1.5 font-medium">
+                    <Loader2 className="w-3.5 h-3.5 animate-spin" />
+                    Searching across Tamil Nadu...
+                  </div>
+                )}
+
+                {/* Empty State */}
+                {filteredOptions.length === 0 && remoteResults.length === 0 && !loadingRemote && (
+                  <div className="p-4 text-center text-xs text-slate-400 dark:text-slate-500 font-medium">
+                    {query.trim().length > 0
+                      ? `No matching ${label}s found for "${query}"`
+                      : `Type to search any ${label} in Tamil Nadu...`}
+                  </div>
+                )}
               </div>
 
               {/* OK Confirm Button at bottom of dropdown when multiple items selected */}
               {multiSelectedCodes && multiSelectedCodes.length > 0 && (
-                <div className="sticky bottom-0 bg-white dark:bg-slate-900 p-1.5 pt-1.5 border-t border-slate-100 dark:border-slate-800 shrink-0 z-10">
+                <div className="sticky bottom-0 bg-white dark:bg-slate-900 p-1.5 pt-1.5 border-t border-slate-100 dark:border-slate-800 shrink-0 z-10 flex items-center gap-1.5">
                   <button
                     type="button"
                     onClick={() => {
@@ -675,7 +791,7 @@ const SearchableSelect: React.FC<SearchableSelectProps> = ({
                       }
                       setIsOpen(false);
                     }}
-                    className="w-full py-1.5 px-3 bg-emerald-600 hover:bg-emerald-700 text-white text-xs font-bold rounded-lg shadow-sm flex items-center justify-center gap-1.5 transition-colors cursor-pointer"
+                    className="flex-1 py-1.5 px-3 bg-emerald-600 hover:bg-emerald-700 text-white text-xs font-bold rounded-lg shadow-sm flex items-center justify-center gap-1.5 transition-colors cursor-pointer"
                   >
                     <CheckCircle2 className="w-3.5 h-3.5" />
                     OK ({multiSelectedCodes.length} selected)
@@ -689,7 +805,7 @@ const SearchableSelect: React.FC<SearchableSelectProps> = ({
 
       {/* Sleek & Elegant Layer Opacity Control Slider (Parcel Level Only) */}
       {level === 'parcel' && (Boolean(selectedCode) || (multiSelectedCodes && multiSelectedCodes.length > 0) || Boolean(activeLayer?.code)) && onChangeOpacity && activeLayer && (
-        <div className="mt-1.5 flex items-center justify-between gap-2.5 px-3 py-1.5 bg-slate-100/70 dark:bg-slate-800/60 rounded-xl border border-slate-200/80 dark:border-slate-700/80 shadow-2xs">
+        <div className="mt-1.5 flex items-center justify-between gap-2.5 px-3 py-1.5 bg-slate-100/70 dark:bg-slate-800/60 rounded-xl border border-cyan-300 dark:border-cyan-600/70 shadow-sm">
           <div className="flex items-center gap-1.5 shrink-0">
             <Sliders className="w-3 h-3 text-sky-600 dark:text-sky-400 stroke-[2.3]" />
             <span className="text-[9.5px] font-black uppercase text-sky-700 dark:text-sky-300 tracking-wider">Opacity</span>
@@ -823,10 +939,34 @@ export const NavigationPanel: React.FC<NavigationPanelProps> = ({
     onResetAll();
   };
 
+  const [internalDistricts, setInternalDistricts] = useState<DistrictItem[]>([]);
+  useEffect(() => {
+    if (districts.length === 0) {
+      fetch(apiUrl('/api/districts'))
+        .then((r) => r.json())
+        .then((data) => {
+          const raw = Array.isArray(data) ? data : (data.data || []);
+          if (raw.length > 0) {
+            setInternalDistricts(raw.map((d: any) => ({
+              code: d.code ?? d.district_code,
+              name: d.name ?? d.district_name,
+              state: d.state ?? '',
+              bbox: d.bbox ?? [],
+              file_path: d.file_path ?? '',
+              geojson_path: d.geojson_path ?? '',
+            })));
+          }
+        })
+        .catch(console.error);
+    }
+  }, [districts]);
+
+  const effectiveDistricts = districts.length > 0 ? districts : internalDistricts;
+
   // Option Mappings
   const districtOptions = useMemo(
-    () => districts.map((d) => ({ code: d.code, name: d.name })),
-    [districts]
+    () => effectiveDistricts.map((d) => ({ code: d.code, name: d.name })),
+    [effectiveDistricts]
   );
 
   const talukOptions = useMemo(
@@ -888,12 +1028,6 @@ export const NavigationPanel: React.FC<NavigationPanelProps> = ({
   }, [parcels, layerType]);
 
   const handleParcelOptionSelect = (selectedVal: string) => {
-    if (layerType === 'vector') {
-      onParcelSelect(selectedVal);
-      return;
-    }
-
-    // FMB Mode: resolve full combo code for the selected base survey
     let baseStr = selectedVal.trim();
     if (baseStr.includes('_')) {
       const parts = baseStr.split('_');
@@ -905,12 +1039,17 @@ export const NavigationPanel: React.FC<NavigationPanelProps> = ({
     const dist = selectedDistrict;
     const tal = selectedTaluk.includes('_') ? selectedTaluk.split('_').pop()! : selectedTaluk;
     const vil = selectedVillage.includes('_') ? selectedVillage.split('_').pop()! : selectedVillage;
-    onParcelSelect(`${dist}_${tal}_${vil}_${baseStr}`);
+
+    if (dist && tal && vil) {
+      onParcelSelect(`${dist}_${tal}_${vil}_${baseStr}`);
+    } else {
+      onParcelSelect(selectedVal);
+    }
   };
 
   const selectedDistrictObj = useMemo(
-    () => districts.find((d) => d.code === selectedDistrict),
-    [districts, selectedDistrict]
+    () => effectiveDistricts.find((d) => d.code === selectedDistrict),
+    [effectiveDistricts, selectedDistrict]
   );
 
   const selectedTalukObj = useMemo(
@@ -950,13 +1089,13 @@ export const NavigationPanel: React.FC<NavigationPanelProps> = ({
     <div className="flex flex-col gap-2 p-0.5">
 
       {/* Phase Switcher: Search By Name vs By Code */}
-      <div className="w-full bg-slate-100 dark:bg-slate-800/80 p-1 rounded-xl flex items-center gap-1 border border-slate-200/80 dark:border-slate-700/80 shadow-2xs">
+      <div className="w-full bg-slate-100 dark:bg-slate-800/80 p-1 rounded-xl flex items-center gap-1 border border-cyan-300 dark:border-cyan-600/70 shadow-sm">
         <button
           type="button"
           onClick={() => setSearchPhase('name')}
           className={`flex-1 py-1.5 px-3 rounded-lg text-[10.5px] font-bold tracking-wide transition-all text-center cursor-pointer ${
             searchPhase === 'name'
-              ? 'bg-white dark:bg-slate-900 text-sky-600 dark:text-sky-400 shadow-xs font-black border border-slate-200/80 dark:border-slate-700'
+              ? 'bg-white dark:bg-slate-900 text-sky-600 dark:text-sky-400 shadow-xs font-black border border-cyan-300 dark:border-cyan-600'
               : 'text-slate-500 dark:text-slate-400 hover:text-slate-800 dark:hover:text-slate-200'
           }`}
         >
@@ -967,7 +1106,7 @@ export const NavigationPanel: React.FC<NavigationPanelProps> = ({
           onClick={() => setSearchPhase('code')}
           className={`flex-1 py-1.5 px-3 rounded-lg text-[10.5px] font-bold tracking-wide transition-all text-center cursor-pointer ${
             searchPhase === 'code'
-              ? 'bg-white dark:bg-slate-900 text-sky-600 dark:text-sky-400 shadow-xs font-black border border-slate-200/80 dark:border-slate-700'
+              ? 'bg-white dark:bg-slate-900 text-sky-600 dark:text-sky-400 shadow-xs font-black border border-cyan-300 dark:border-cyan-600'
               : 'text-slate-500 dark:text-slate-400 hover:text-slate-800 dark:hover:text-slate-200'
           }`}
         >
@@ -981,8 +1120,8 @@ export const NavigationPanel: React.FC<NavigationPanelProps> = ({
         <SearchableSelect
           label="District"
           level="district"
-          dotColor="bg-sky-500"
-          defaultColor="#0284c7"
+          dotColor="bg-yellow-400"
+          defaultColor="#facc15"
           currentColor={activeLayerColors.district}
           onChangeLayerColor={onChangeLayerColor}
           activeLayer={activeLayers.district}
@@ -993,10 +1132,11 @@ export const NavigationPanel: React.FC<NavigationPanelProps> = ({
           options={districtOptions}
           selectedCode={selectedDistrict}
           onSelect={onDistrictSelect}
+          onSearchResultSelect={onSearchResultSelect}
           mode={searchPhase}
           loading={loadingDistricts}
-          placeholder={searchPhase === 'name' ? 'Select District...' : 'Select District Code (e.g. DIST_3301)'}
-          activeColorClass="text-sky-600 dark:text-sky-400"
+          placeholder={searchPhase === 'name' ? 'Select or type District...' : 'Select District Code (e.g. 01)'}
+          activeColorClass="text-yellow-600 dark:text-yellow-400"
           resetKey={resetKey}
           multiSelectedCodes={multiDistricts}
           onMultiSelect={onToggleMultiDistrict}
@@ -1018,11 +1158,14 @@ export const NavigationPanel: React.FC<NavigationPanelProps> = ({
           options={talukOptions}
           selectedCode={selectedTaluk}
           onSelect={onTalukSelect}
+          onSearchResultSelect={onSearchResultSelect}
           mode={searchPhase}
-          disabled={multiDistricts.length === 0 && !selectedDistrict}
-          disabledMessage={searchPhase === 'name' ? 'Select Taluk...' : 'Select Taluk Code...'}
           loading={loadingTaluks}
-          placeholder={searchPhase === 'name' ? 'Select Taluk...' : 'Select Taluk Code (e.g. TAL_330101)'}
+          placeholder={
+            selectedDistrict
+              ? (searchPhase === 'name' ? 'Select or type Taluk Name...' : 'Select Taluk Code (e.g. 04)...')
+              : (searchPhase === 'name' ? 'Search any Taluk in TN...' : 'Search Taluk Code...')
+          }
           activeColorClass="text-indigo-600 dark:text-indigo-400"
           resetKey={resetKey}
           multiSelectedCodes={multiTaluks}
@@ -1043,11 +1186,14 @@ export const NavigationPanel: React.FC<NavigationPanelProps> = ({
           options={villageOptions}
           selectedCode={selectedVillage}
           onSelect={onVillageSelect}
+          onSearchResultSelect={onSearchResultSelect}
           mode={searchPhase}
-          disabled={multiTaluks.length === 0 && !selectedTaluk}
-          disabledMessage={searchPhase === 'name' ? 'Select Village...' : 'Select Village Code...'}
           loading={loadingVillages}
-          placeholder={searchPhase === 'name' ? 'Select Village...' : 'Select Village Code (e.g. VIL_33010101)'}
+          placeholder={
+            selectedTaluk
+              ? (searchPhase === 'name' ? 'Select or type Village Name...' : 'Select Village Code (e.g. 135)...')
+              : (searchPhase === 'name' ? 'Search any Village in TN...' : 'Search Village Code...')
+          }
           activeColorClass="text-teal-600 dark:text-teal-400"
           resetKey={resetKey}
           multiSelectedCodes={multiVillages}
@@ -1055,15 +1201,15 @@ export const NavigationPanel: React.FC<NavigationPanelProps> = ({
         />
 
         {/* 3b. Layer Format Selector */}
-        <div className={`p-2 rounded-xl border transition-all relative z-0 ${
+        <div className={`p-2 rounded-xl border border-cyan-300 dark:border-cyan-600/70 shadow-sm transition-all relative z-0 ${
           multiVillages.length === 0 && !selectedVillage
-            ? 'bg-slate-50/50 dark:bg-slate-900/30 border-slate-200/50 dark:border-slate-800/50 opacity-40 pointer-events-none'
-            : 'bg-slate-50/80 dark:bg-slate-900/80 border-slate-200/90 dark:border-slate-700/90 shadow-2xs'
+            ? 'bg-slate-50/50 dark:bg-slate-900/30 opacity-60 pointer-events-none'
+            : 'bg-slate-50/80 dark:bg-slate-900/80'
         }`}>
           <div className="flex items-center justify-between mb-1.5 px-0.5">
             <div className="flex items-center gap-1.5">
-              <span className="w-1.5 h-1.5 rounded-full bg-sky-500 shrink-0 shadow-2xs shadow-sky-500/50" />
-              <span className="text-[10px] font-black text-sky-600 dark:text-sky-400 uppercase tracking-wider">
+              <span className="w-1.5 h-1.5 rounded-full bg-cyan-500 shrink-0 shadow-2xs shadow-cyan-500/50" />
+              <span className="text-[10px] font-black text-cyan-600 dark:text-cyan-400 uppercase tracking-wider">
                 LAYER FORMAT
               </span>
             </div>
@@ -1080,7 +1226,7 @@ export const NavigationPanel: React.FC<NavigationPanelProps> = ({
               className={`py-1.5 px-2 rounded-lg text-[10.5px] font-extrabold transition-all cursor-pointer border text-center ${
                 layerType === 'vector'
                   ? 'bg-gradient-to-r from-sky-600 to-cyan-600 text-white border-sky-600 shadow-xs'
-                  : 'bg-white dark:bg-slate-800 text-slate-700 dark:text-slate-200 border-slate-200 dark:border-slate-700 hover:border-sky-400'
+                  : 'bg-white dark:bg-slate-800 text-slate-700 dark:text-slate-200 border-cyan-300/70 dark:border-cyan-700/70 hover:border-cyan-400'
               }`}
             >
               Vector (Boundary)
@@ -1093,7 +1239,7 @@ export const NavigationPanel: React.FC<NavigationPanelProps> = ({
               className={`py-1.5 px-2 rounded-lg text-[10.5px] font-extrabold transition-all cursor-pointer border text-center ${
                 layerType === 'fmb'
                   ? 'bg-gradient-to-r from-sky-600 to-cyan-600 text-white border-sky-600 shadow-xs'
-                  : 'bg-white dark:bg-slate-800 text-slate-700 dark:text-slate-200 border-slate-200 dark:border-slate-700 hover:border-sky-400'
+                  : 'bg-white dark:bg-slate-800 text-slate-700 dark:text-slate-200 border-cyan-300/70 dark:border-cyan-700/70 hover:border-cyan-400'
               }`}
             >
               FMB (Subdivisions)
@@ -1132,33 +1278,6 @@ export const NavigationPanel: React.FC<NavigationPanelProps> = ({
           onMultiSelect={onToggleMultiParcel}
         />
       </div>
-
-      {/* Bottom Action Controls: Back Button & Reset All */}
-      {(currentLevel !== 'none' || Boolean(selectedDistrict) || multiDistricts.length > 0) && (
-        <div className="pt-2 mt-1 border-t border-slate-200/80 dark:border-slate-800/80 flex items-center gap-2">
-          {backLabel && (
-            <button
-              type="button"
-              onClick={onBackStep}
-              className="flex-1 py-2 px-3 rounded-xl bg-slate-100 hover:bg-slate-200 dark:bg-slate-800 dark:hover:bg-slate-700/80 text-slate-700 dark:text-slate-200 font-bold text-xs flex items-center justify-center gap-2 transition-all active:scale-98 cursor-pointer border border-slate-200/80 dark:border-slate-700/80 shadow-2xs"
-            >
-              <ArrowLeft className="w-3.5 h-3.5" />
-              <span>{backLabel}</span>
-            </button>
-          )}
-
-          <button
-            type="button"
-            onClick={handleResetAll}
-            title="Reset All Layers to Tamil Nadu State View"
-            className="py-2 px-3 rounded-xl bg-rose-50 hover:bg-rose-100 dark:bg-rose-950/40 dark:hover:bg-rose-900/60 text-rose-600 dark:text-rose-400 font-bold text-xs flex items-center justify-center gap-1.5 transition-all active:scale-98 cursor-pointer border border-rose-200/80 dark:border-rose-900/60 shadow-2xs shrink-0"
-          >
-            <RefreshCw className="w-3.5 h-3.5" />
-            <span>Reset</span>
-          </button>
-        </div>
-      )}
-
     </div>
   );
 };

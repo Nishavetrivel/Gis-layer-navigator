@@ -22,15 +22,27 @@ export default defineConfig(() => {
       hmr: process.env.DISABLE_HMR !== 'true',
       // Disable file watching when DISABLE_HMR is true to save CPU during agent edits.
       watch: process.env.DISABLE_HMR === 'true' ? null : {
-        ignored: ['**/data/**', '**/public/data/**', '**/dist/**', '**/*.sqlite*'],
+        ignored: [
+          '**/data/**',
+          '**/public/data/**',
+          '**/dist/**',
+          '**/*.zip',
+          '**/*.sqlite*',
+          '**/backend/**',
+          '**/scripts/**',
+          '**/template.yaml',
+          '**/.system_generated/**',
+          '**/.agents/**',
+        ],
       },
-      // Proxy /api/* to the backend. Defaults to the local handler server
-      // (npm run dev:api); set VITE_API_BASE_URL to the deployed API Gateway
-      // stage URL to develop the frontend against AWS instead.
+      // Proxy /api/* to AWS API Gateway (or local backend if VITE_USE_LOCAL_API=true)
       proxy: {
         '/api': {
-          target: process.env.VITE_API_BASE_URL || 'http://127.0.0.1:8000',
+          target: process.env.VITE_USE_LOCAL_API === 'true'
+            ? 'http://127.0.0.1:8000'
+            : 'https://len52tbo7c.execute-api.ap-south-1.amazonaws.com/dev',
           changeOrigin: true,
+          secure: false,
         },
       },
     },

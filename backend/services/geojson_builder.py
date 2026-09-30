@@ -111,6 +111,16 @@ async def build_merged_geojson(
     raw_vil = vc if vc != "*" else ""
     raw_sno = survey_no or ""
 
+    # Prevent parcel search from querying across all villages in a taluk/district
+    if level == "parcel" and (not raw_vil or vc == "*"):
+        return {
+            "success": False,
+            "level": "parcel",
+            "code": code,
+            "message": "Specific village context is required for parcel geometry.",
+            "geojson": {"type": "FeatureCollection", "features": []}
+        }
+
     # Check In-Memory RAM Cache first for sub-millisecond response
     cache_key = f"{level}_{code}_{raw_dist}_{raw_tal}_{raw_vil}_{raw_sno}_{ft}"
     if cache_key in memory_geojson_cache:

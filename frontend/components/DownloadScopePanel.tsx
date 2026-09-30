@@ -1,4 +1,4 @@
-﻿import React, { useState, useCallback } from 'react';
+import React, { useState, useCallback } from 'react';
 import { DistrictItem, TalukItem, VillageItem, ParcelItem, ExtractedLayerResult } from '../types';
 import { Download, Loader2, AlertCircle, Check, X } from 'lucide-react';
 import { apiUrl, API_BASE } from '@/frontend/lib/api';
@@ -196,7 +196,12 @@ export const DownloadScopePanel: React.FC<DownloadScopePanelProps> = ({
   });
 
   const displayParcelName = parcelBaseNo ? `Survey ${parcelBaseNo}` : (pObj?.name || (selectedParcel ? `Survey ${selectedParcel}` : ''));
-  const parcelDownloadCode = pObj?.code || (selectedDistrict && rawTaluk && rawVillage && parcelBaseNo ? `${selectedDistrict}_${rawTaluk}_${rawVillage}_${parcelBaseNo}` : (selectedParcel || (activeParcels.length > 0 ? activeParcels[0] : '')));
+  const finalSurveyStr = parcelBaseNo || selectedParcel || (activeParcels.length > 0 ? activeParcels[0] : '');
+  const parcelDownloadCode = pObj?.code || (
+    selectedDistrict && rawTaluk && rawVillage && finalSurveyStr
+      ? `${selectedDistrict}_${rawTaluk}_${rawVillage}_${finalSurveyStr}`
+      : (selectedParcel || (activeParcels.length > 0 ? activeParcels[0] : ''))
+  );
 
   const buildUrl = (level: string, code: string, type: 'vector' | 'fmb', extraParams?: string) =>
     `${API_BASE}/api/download/${level}/${encodeURIComponent(code)}?type=${type}&format=${exportFormat}${extraParams ? `&${extraParams}` : ''}`;
@@ -355,7 +360,7 @@ export const DownloadScopePanel: React.FC<DownloadScopePanelProps> = ({
                     'parcel',
                     activeParcels.length > 1 ? activeParcels.join(',') : parcelDownloadCode,
                     downloadType,
-                    `district_code=${selectedDistrict || activeDistricts.join(',')}&taluk_code=${rawTaluk || activeTaluks.join(',')}&village_code=${rawVillage || activeVillages.join(',')}&base_survey=${parcelBaseNo}${pObj?.subdivision ? `&subdivision=${pObj.subdivision}` : ''}`
+                    `district_code=${selectedDistrict || activeDistricts.join(',')}&taluk_code=${rawTaluk || activeTaluks.join(',')}&village_code=${rawVillage || activeVillages.join(',')}&base_survey=${activeParcels.length > 1 ? activeParcels.join(',') : parcelBaseNo}${pObj?.subdivision ? `&subdivision=${pObj.subdivision}` : ''}`
                   )}
                   label={`Download (${fmtUpper})`}
                   variant={buttonVariant}

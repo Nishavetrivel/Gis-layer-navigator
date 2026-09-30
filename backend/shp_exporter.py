@@ -131,6 +131,18 @@ def export_features_to_shp_in_zip(features: List[Dict[str, Any]], layer_name: st
                         if all_rings:
                             w.poly(all_rings)
                             w.record(**rec_vals)
+                    elif g_type in ('LineString', 'MultiLineString'):
+                        rings = [coords] if g_type == 'LineString' else coords
+                        poly_rings = []
+                        for ring in rings:
+                            if len(ring) >= 3:
+                                r = list(ring)
+                                if r[0] != r[-1]:
+                                    r.append(r[0])
+                                poly_rings.append(r)
+                        if poly_rings:
+                            w.poly(poly_rings)
+                            w.record(**rec_vals)
             except Exception:
                 pass
 

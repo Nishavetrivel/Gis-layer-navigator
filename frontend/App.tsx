@@ -1,4 +1,4 @@
-﻿import React, { useState, useEffect, useRef, useCallback } from 'react';
+import React, { useState, useEffect, useRef, useCallback } from 'react';
 import {
   DistrictItem,
   TalukItem,
@@ -15,15 +15,19 @@ import { GisMap } from './components/GisMap';
 import { NavigationPanel } from './components/NavigationPanel';
 import { LayerInspector } from './components/LayerInspector';
 import { DownloadScopePanel } from './components/DownloadScopePanel';
-import { AppInitializationModal, PreloadedLayers } from './components/AppInitializationModal';
 import { CART_LAYERS_CONFIG } from './cartLayersConfig';
 import { getFeatureBBox } from './utils/geoUtils';
 import { MULTI_SELECTION_PALETTE } from './utils/colorUtils';
 import { apiUrl, API_BASE } from '@/frontend/lib/api';
+import { DataNotAvailableModal, NoDataInfo } from './components/DataNotAvailableModal';
+
+// Ensure clean state on opening the application (no default data or auto-zoom)
+try {
+  sessionStorage.removeItem('gis_active_selection_state_v2');
+} catch (e) {}
 
 export default function App() {
-  const [isAppReady, setIsAppReady] = useState(false);
-  const [preloadedLayers, setPreloadedLayers] = useState<PreloadedLayers | null>(null);
+  const [preloadedLayers, setPreloadedLayers] = useState<any>(null);
   // Resizable Sidebar Splitter & Toggle State
   const [sidebarWidth, setSidebarWidth] = useState<number>(300);
   const [isResizing, setIsResizing] = useState<boolean>(false);
@@ -65,17 +69,20 @@ export default function App() {
   const [villages, setVillages] = useState<VillageItem[]>([]);
   const [parcels, setParcels] = useState<ParcelItem[]>([]);
 
-  // Selected codes (single-select preview — drives the map)
+  // Selected codes (single-select preview — drives the map, always starts clean with no default selection)
   const [selectedDistrict, setSelectedDistrict] = useState<string>('');
   const [selectedTaluk, setSelectedTaluk] = useState<string>('');
   const [selectedVillage, setSelectedVillage] = useState<string>('');
   const [selectedParcel, setSelectedParcel] = useState<string>('');
   // Layer Format Mode (vector: Base Boundary by default, fmb: FMB Subdivisions)
   const [layerType, setLayerType] = useState<'fmb' | 'vector'>('vector');
-  const [subdivisionColor, setSubdivisionColor] = useState<string>('#22c55e');
+  const [subdivisionColor, setSubdivisionColor] = useState<string>('#facc15');
 
   // Polygon Extraction State
   const [extractedPolygonResult, setExtractedPolygonResult] = useState<ExtractedLayerResult | null>(null);
+
+  // Data Not Available Pop-up state
+  const [noDataInfo, setNoDataInfo] = useState<NoDataInfo | null>(null);
 
   // Multi-select download basket (independent of map preview)
   const [multiDistricts, setMultiDistricts] = useState<string[]>([]);
@@ -195,7 +202,7 @@ export default function App() {
         base_geojson: combinedBaseFeatures.length > 0 ? { type: 'FeatureCollection', features: combinedBaseFeatures } : undefined,
         bbox: combinedBbox,
         visible: true,
-        opacity: level === 'parcel' ? 0.45 : 0.25,
+        opacity: 0,
       };
 
       setActiveLayers((prev) => ({
@@ -210,8 +217,9 @@ export default function App() {
 
   // Sync multi-district map preview and load child taluks
   useEffect(() => {
-    if (multiDistricts.length >= 2) {
+    if (multiDistricts.length >= 1) {
       updateMultiLayer('district', multiDistricts);
+      setZoomRequestLevel('district');
       // Fetch combined taluks for all selected districts
       setLoadingTaluks(true);
       fetch(`${API_BASE}/api/taluks?district_code=${multiDistricts.join(',')}`)
@@ -228,12 +236,14 @@ export default function App() {
         })
         .catch(console.error)
         .finally(() => setLoadingTaluks(false));
+    } else if (multiDistricts.length === 0 && !selectedDistrict) {
+      setActiveLayers((prev) => ({ ...prev, district: null }));
     }
   }, [multiDistricts]);
 
   // Sync multi-taluk map preview and load child villages
   useEffect(() => {
-    if (multiTaluks.length >= 2) {
+    if (multiTaluks.length >= 1) {
       updateMultiLayer('taluk', multiTaluks, selectedDistrict);
       // Fetch combined villages for all selected taluks
       setLoadingVillages(true);
@@ -257,7 +267,7 @@ export default function App() {
 
   // Sync multi-village map preview and load child parcels
   useEffect(() => {
-    if (multiVillages.length >= 2) {
+    if (multiVillages.length >= 1) {
       updateMultiLayer('village', multiVillages, selectedDistrict, selectedTaluk);
       // Fetch combined parcels for all selected villages
       setLoadingParcels(true);
@@ -286,7 +296,7 @@ export default function App() {
 
   // Sync multi-parcel map preview
   useEffect(() => {
-    if (multiParcels.length >= 2) {
+    if (multiParcels.length >= 1) {
       updateMultiLayer('parcel', multiParcels, selectedDistrict, selectedTaluk, selectedVillage);
     }
   }, [multiParcels, selectedDistrict, selectedTaluk, selectedVillage]);
@@ -476,7 +486,6 @@ export default function App() {
         }));
         setDistricts(mapped);
 
-        // 1. Immediately fetch and display all Tamil Nadu District boundaries on website open
         const dLayer = await fetchGeoJSON('district', 'all');
         if (dLayer) {
           setActiveLayers({ district: dLayer, taluk: null, village: null, parcel: null });
@@ -515,12 +524,12 @@ export default function App() {
       const res = await fetch(url, { cache: 'no-store' });
       const json = await res.json();
       console.log(`[fetchGeoJSON] Response for ${level} ${code}:`, json);
-      if (json.success) {
+      if (json.success && json.geojson && (json.geojson.features?.length > 0 || code === 'all')) {
         const DEFAULT_LEVEL_COLORS: Record<GisLevel, string> = {
-          district: '#06b6d4', // Electric Cyan for sleek district boundaries
+          district: '#facc15', // Vibrant Yellow/Gold for District boundary
           taluk: '#9333ea',    // Purple
-          village: '#f59e0b',  // Yellow (Vector Village Boundary)
-          parcel: '#22c55e',   // Green (FMB Parcel / Subdivision)
+          village: '#facc15',  // Yellow (Village Boundary per user request)
+          parcel: '#22c55e',   // Green
         };
 
         return {
@@ -533,7 +542,7 @@ export default function App() {
           bbox: json.bbox,
           color: DEFAULT_LEVEL_COLORS[level],
           visible: true,
-          opacity: level === 'parcel' ? 0.45 : 0.25,
+          opacity: 0,
         } as ActiveGisLayer;
       }
     } catch (err) {
@@ -853,12 +862,24 @@ export default function App() {
     }
 
     // Load Parcel GeoJSON while retaining parent District, Taluk, and Village layers
-    const rawTal = (talCode || '').includes('_') ? (talCode || '').split('_').pop()! : (talCode || '');
-    const rawVil = (vilCode || '').includes('_') ? (vilCode || '').split('_').pop()! : (vilCode || '');
-    const dLayer = distCode ? await fetchGeoJSON('district', distCode) : null;
-    const tLayer = talCode ? await fetchGeoJSON('taluk', talCode, distCode) : null;
-    const vLayer = vilCode ? await fetchGeoJSON('village', vilCode, distCode, rawTal, rawVil, layerType) : null;
-    const layer = await fetchGeoJSON('parcel', code, distCode, talCode, vilCode);
+    let finalDist = distCode;
+    let finalTal = (talCode || '').includes('_') ? (talCode || '').split('_').pop()! : (talCode || '');
+    let finalVil = (vilCode || '').includes('_') ? (vilCode || '').split('_').pop()! : (vilCode || '');
+    let finalSurvey = code;
+    if (code.includes('_')) {
+      const parts = code.split('_');
+      if (parts.length >= 4) {
+        if (!finalDist) finalDist = parts[0];
+        if (!finalTal) finalTal = parts[1];
+        if (!finalVil) finalVil = parts[2];
+        finalSurvey = parts.slice(3).join('_');
+      }
+    }
+
+    const dLayer = finalDist ? await fetchGeoJSON('district', finalDist) : null;
+    const tLayer = finalTal ? await fetchGeoJSON('taluk', finalTal, finalDist) : null;
+    const vLayer = finalVil ? await fetchGeoJSON('village', finalVil, finalDist, finalTal, finalVil, layerType) : null;
+    const layer = (finalVil && finalSurvey) ? await fetchGeoJSON('parcel', finalSurvey, finalDist, finalTal, finalVil, layerType) : null;
     setActiveLayers((prev) => ({
       ...prev,
       district: prev.district || dLayer,
@@ -867,7 +888,7 @@ export default function App() {
       parcel: layer,
     }));
 
-    fetchMetadata('parcel', code);
+    fetchMetadata('parcel', finalSurvey);
     setZoomRequestLevel('parcel');
   };
 
@@ -1106,7 +1127,6 @@ export default function App() {
     }
   };
 
-  // Toggle Layer Visibility
   const handleToggleVisibility = (level: GisLevel) => {
     setActiveLayers((prev) => {
       const cur = prev[level];
@@ -1130,14 +1150,24 @@ export default function App() {
     });
   };
 
-  // Toggle Layer Labels (Show / Hide Survey Number Labels)
+  // Toggle Layer Labels (Show / Hide Village Names or Survey Number Labels)
   const handleToggleLabels = (level: GisLevel) => {
     setActiveLayers((prev) => {
       const cur = prev[level];
-      if (!cur) return prev;
+      const nextShowLabels = cur ? (cur.showLabels === false ? true : false) : false;
       return {
         ...prev,
-        [level]: { ...cur, showLabels: cur.showLabels === false ? true : false },
+        [level]: cur
+          ? { ...cur, showLabels: nextShowLabels }
+          : ({
+              id: level,
+              level: level,
+              name: level,
+              code: (level === 'village' ? selectedVillage : level === 'taluk' ? selectedTaluk : selectedDistrict) || '',
+              visible: true,
+              opacity: 1,
+              showLabels: nextShowLabels,
+            } as unknown as ActiveGisLayer),
       };
     });
   };
@@ -1315,14 +1345,6 @@ export default function App() {
 
   return (
     <div className="flex flex-col h-screen w-screen overflow-hidden bg-slate-100 dark:bg-slate-950 text-slate-900 dark:text-slate-100 font-sans">
-      {!isAppReady && (
-        <AppInitializationModal
-          onComplete={(data) => {
-            setPreloadedLayers(data);
-            setIsAppReady(true);
-          }}
-        />
-      )}
       {/* Full Screen Map Stage */}
       <main className="w-full h-full relative flex-1 min-w-0">
         <GisMap
@@ -1341,11 +1363,11 @@ export default function App() {
           onZoomRequestHandled={() => setZoomRequestLevel(null)}
           onChangeLayerColor={handleChangeColor}
           activeLayerColors={{
-            district: activeLayers.district?.color,
-            taluk: activeLayers.taluk?.color,
-            village: activeLayers.village?.color,
+            district: activeLayers.district?.color || '#facc15',
+            taluk: activeLayers.taluk?.color || '#9333ea',
+            village: activeLayers.village?.color || '#facc15',
             subdivision: '#22c55e',
-            parcel: activeLayers.parcel?.color,
+            parcel: activeLayers.parcel?.color || '#22c55e',
           }}
           onPolygonExtracted={setExtractedPolygonResult}
           activeCartLayers={activeCartLayers}

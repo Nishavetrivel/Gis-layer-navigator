@@ -1,4 +1,4 @@
-﻿import React, { useState, useEffect, useRef, useMemo, useCallback } from 'react';
+import React, { useState, useEffect, useRef, useMemo, useCallback } from 'react';
 import { SearchResult, GisLevel } from '../types';
 import {
   Search,
@@ -10,13 +10,13 @@ import {
   CheckCircle2,
   Layers,
   ArrowRight,
-  Sparkles,
   Building2,
   Compass,
   Home,
   FileSpreadsheet,
   Filter,
   RefreshCw,
+  Download,
 } from 'lucide-react';
 import { apiUrl, API_BASE } from '@/frontend/lib/api';
 
@@ -28,21 +28,14 @@ interface SearchBarProps {
   onToggleSidebar?: () => void;
   isSidebarOpen?: boolean;
   onRefreshMap?: () => void;
+  onSearchStart?: () => void;
+  resetKey?: number;
 }
 
-type CategoryFilter = 'district' | 'taluk' | 'village' | 'parcel';
+type CategoryFilter = 'all' | 'district' | 'taluk' | 'village' | 'parcel';
 
 const RECENT_SEARCHES_KEY = 'gis_recent_searches_v2';
 const MAX_RECENT = 6;
-
-// Popular default shortcuts for quick exploration
-const QUICK_SUGGESTIONS: Array<{ name: string; query: string; level: GisLevel; desc: string }> = [
-  { name: 'Ponneri', query: 'Ponneri', level: 'taluk', desc: 'Taluk • Tiruvallur (01)' },
-  { name: 'Minjur', query: 'Minjur', level: 'village', desc: 'Village (001) • Ponneri' },
-  { name: 'Tiruvallur', query: 'Tiruvallur', level: 'district', desc: 'District (01) • TN' },
-  { name: 'Harur', query: 'Harur', level: 'taluk', desc: 'Taluk • Dharmapuri (05)' },
-  { name: 'Athipattu', query: 'Athipattu', level: 'village', desc: 'Village (002) • Ponneri' },
-];
 
 /**
  * Highlights matches of query within text
@@ -88,18 +81,31 @@ export const SearchBar: React.FC<SearchBarProps> = ({
   onToggleSidebar,
   isSidebarOpen = false,
   onRefreshMap,
+  onSearchStart,
+  resetKey,
 }) => {
   const [query, setQuery] = useState('');
   const [results, setResults] = useState<SearchResult[]>([]);
   const [loading, setLoading] = useState(false);
   const [open, setOpen] = useState(false);
-  const [selectedFilter, setSelectedFilter] = useState<CategoryFilter>('district');
+  const [selectedFilter, setSelectedFilter] = useState<CategoryFilter>('all');
   const [selectedIndex, setSelectedIndex] = useState<number>(-1);
   const [recentSearches, setRecentSearches] = useState<SearchResult[]>([]);
 
   const wrapperRef = useRef<HTMLDivElement>(null);
   const inputRef = useRef<HTMLInputElement>(null);
   const listRef = useRef<HTMLDivElement>(null);
+
+  // Clear search inputs when explicit reset occurs
+  useEffect(() => {
+    if (resetKey !== undefined && resetKey > 0) {
+      setQuery('');
+      setResults([]);
+      setOpen(false);
+      setSelectedFilter('all');
+      setSelectedIndex(-1);
+    }
+  }, [resetKey]);
 
   // Auto-focus when autoFocus prop is true
   useEffect(() => {
@@ -163,21 +169,17 @@ export const SearchBar: React.FC<SearchBarProps> = ({
     const timer = setTimeout(async () => {
       setLoading(true);
       try {
-        const res = await fetch(`${API_BASE}/api/search?q=${encodeURIComponent(query.trim())}&limit=100`);
+        const res = await fetch(apiUrl(`/api/search?q=${encodeURIComponent(query.trim())}&limit=100`));
         const json = await res.json();
         if (json.success) {
           const items: SearchResult[] = json.data || [];
           setResults(items);
           setOpen(true);
           setSelectedIndex(-1);
-          // Auto-select first available tier (district -> taluk -> village -> parcel)
+          // Keep category filter if user explicitly selected a filter with results, otherwise show 'all'
           setSelectedFilter((prev) => {
-            if (items.some((it) => it.level === prev)) return prev;
-            if (items.some((it) => it.level === 'district')) return 'district';
-            if (items.some((it) => it.level === 'taluk')) return 'taluk';
-            if (items.some((it) => it.level === 'village')) return 'village';
-            if (items.some((it) => it.level === 'parcel')) return 'parcel';
-            return 'district';
+            if (prev !== 'all' && items.some((it) => it.level === prev)) return prev;
+            return 'all';
           });
         }
       } catch (err) {
@@ -190,8 +192,16 @@ export const SearchBar: React.FC<SearchBarProps> = ({
     return () => clearTimeout(timer);
   }, [query]);
 
-  // Filter results by selected category tab
+  // Filter results by selected category tab (or all items sorted logically)
   const filteredResults = useMemo(() => {
+    if (selectedFilter === 'all') {
+      const priority: Record<GisLevel, number> = { district: 1, taluk: 2, village: 3, parcel: 4 };
+      return [...results].sort((a, b) => {
+        const pDiff = (priority[a.level] || 99) - (priority[b.level] || 99);
+        if (pDiff !== 0) return pDiff;
+        return (b.score || 0) - (a.score || 0);
+      });
+    }
     return results.filter((r) => r.level === selectedFilter);
   }, [results, selectedFilter]);
 
@@ -210,7 +220,7 @@ export const SearchBar: React.FC<SearchBarProps> = ({
     saveRecentSearch(r);
     onSelectResult(r);
     setOpen(false);
-    setQuery('');
+    setQuery(r.name);
     setSelectedIndex(-1);
   }, [onSelectResult, recentSearches]);
 
@@ -263,11 +273,11 @@ export const SearchBar: React.FC<SearchBarProps> = ({
     }
   > = {
     district: {
-      bgLight: '#e0f2fe',
-      bgDark: '#082f49',
-      color: '#0284c7',
+      bgLight: '#fef9c3',
+      bgDark: '#422006',
+      color: '#facc15',
       label: 'DISTRICT',
-      badgeClass: 'bg-sky-100 dark:bg-sky-950/80 text-sky-700 dark:text-sky-300 border-sky-200 dark:border-sky-800',
+      badgeClass: 'bg-yellow-100 dark:bg-yellow-950/80 text-yellow-700 dark:text-yellow-300 border-yellow-200 dark:border-yellow-800',
       Icon: Building2,
     },
     taluk: {
@@ -299,7 +309,7 @@ export const SearchBar: React.FC<SearchBarProps> = ({
   return (
     <div ref={wrapperRef} className={`relative w-full ${className}`}>
       {/* Pill Search Input Container matching Startup Genome / Modern Portal Style */}
-      <div className="relative flex items-center bg-slate-100/90 dark:bg-slate-800/90 hover:bg-slate-100 dark:hover:bg-slate-800 border border-slate-200/80 dark:border-slate-700/80 rounded-full shadow-2xs hover:shadow-xs focus-within:bg-white dark:focus-within:bg-slate-900 focus-within:shadow-sm focus-within:border-cyan-500 dark:focus-within:border-cyan-400 focus-within:ring-2 focus-within:ring-cyan-400/20 transition-all duration-150 px-3 py-1.5 gap-2">
+      <div className="relative flex items-center bg-white dark:bg-slate-800/95 hover:bg-white dark:hover:bg-slate-800 border-2 border-cyan-400 dark:border-cyan-400 rounded-full shadow-sm hover:shadow-md focus-within:bg-white dark:focus-within:bg-slate-900 focus-within:shadow-md focus-within:border-cyan-500 dark:focus-within:border-cyan-300 focus-within:ring-2 focus-within:ring-cyan-400/30 transition-all duration-150 px-3 py-1.5 gap-2">
         {/* Search Icon / Emoji on the left */}
         <Search className="w-4 h-4 text-cyan-600 dark:text-cyan-400 stroke-[2.5] shrink-0" />
 
@@ -310,18 +320,25 @@ export const SearchBar: React.FC<SearchBarProps> = ({
           onChange={(e) => {
             const val = e.target.value;
             setQuery(val);
-            setOpen(true);
-            if (val.trim().length > 0 && isSidebarOpen && onToggleSidebar) {
-              onToggleSidebar();
+            if (val.trim()) {
+              setOpen(true);
+              onSearchStart?.();
+            } else {
+              setOpen(false);
             }
           }}
-          onFocus={() => setOpen(true)}
+          onFocus={() => {
+            onSearchStart?.();
+            if (query.trim()) {
+              setOpen(true);
+            }
+          }}
           onKeyDown={handleKeyDown}
           placeholder={placeholder}
           className="w-full bg-transparent text-slate-800 dark:text-slate-100 text-xs font-medium py-1 focus:outline-none placeholder:text-slate-400 dark:placeholder:text-slate-500 placeholder:font-normal font-sans"
         />
 
-        {/* Right Controls: Clear button + Filter icon */}
+        {/* Right Controls: Clear button + Download + Filter icon */}
         <div className="flex items-center gap-1.5 shrink-0">
           {loading && <Loader2 className="w-3.5 h-3.5 text-cyan-600 animate-spin" />}
 
@@ -347,56 +364,38 @@ export const SearchBar: React.FC<SearchBarProps> = ({
                 e.stopPropagation();
                 onRefreshMap();
               }}
-              title="Apply Filters & Refresh Map"
-              className="p-1.5 rounded-full transition-all cursor-pointer flex items-center justify-center shrink-0 active:scale-95 border bg-emerald-50 dark:bg-emerald-950/80 text-emerald-600 dark:text-emerald-400 hover:bg-emerald-500 hover:text-white border-emerald-200 dark:border-emerald-800"
+              title="Refresh Map"
+              className="p-1.5 rounded-full transition-all cursor-pointer flex items-center justify-center shrink-0 active:scale-95 border bg-slate-50 dark:bg-slate-800 text-slate-600 dark:text-slate-300 hover:bg-slate-200 hover:text-slate-900 dark:hover:text-white border-slate-200 dark:border-slate-700"
             >
               <RefreshCw className="w-3.5 h-3.5 stroke-[2.3]" />
-            </button>
-          )}
-
-          {onToggleSidebar && (
-            <button
-              type="button"
-              onClick={(e) => {
-                e.stopPropagation();
-                onToggleSidebar();
-              }}
-              title={isSidebarOpen ? "Hide Navigation Panel (Filters)" : "Open Navigation Panel (Filters)"}
-              className={`p-1.5 rounded-full transition-all cursor-pointer flex items-center justify-center shrink-0 active:scale-95 border ${
-                isSidebarOpen
-                  ? 'bg-cyan-500 text-white border-cyan-400 shadow-2xs'
-                  : 'bg-cyan-50 dark:bg-cyan-950/80 text-cyan-600 dark:text-cyan-400 hover:bg-cyan-500 hover:text-white border-cyan-200 dark:border-cyan-800'
-              }`}
-            >
-              <Filter className="w-3.5 h-3.5 stroke-[2.3]" />
             </button>
           )}
         </div>
       </div>
 
       {/* Autocomplete Suggestions Dropdown (Compact Single-Line Google Maps Style) */}
-      {open && (query.trim().length > 0 || recentSearches.length > 0) && (
-        <div className="absolute top-full left-0 right-0 mt-1 bg-white/98 dark:bg-slate-900/98 backdrop-blur-xl border border-slate-200 dark:border-slate-800 rounded-xl shadow-xl z-50 overflow-hidden flex flex-col max-h-64 animate-in fade-in duration-100">
-          {/* 1. Category Filter Chips (Districts, Taluks, Villages, Surveys) - Perfectly Fitted */}
+      {open && query.trim().length > 0 && (
+        <div className="absolute top-full left-0 right-0 mt-1 bg-white/98 dark:bg-slate-900/98 backdrop-blur-xl border-2 border-cyan-400 dark:border-cyan-400 rounded-xl shadow-xl shadow-cyan-500/10 z-50 overflow-hidden flex flex-col max-h-72 animate-in fade-in duration-100">
+          {/* 1. Category Filter Chips (Districts, Taluks, Villages, Surveys - "All" removed per user request) */}
           {query.trim().length > 0 && results.length > 0 && (
-            <div className="p-0.5 border-b border-slate-100 dark:border-slate-800/80 grid grid-flow-col auto-cols-fr gap-0.5 bg-slate-50/90 dark:bg-slate-950/60 shrink-0 w-full">
+            <div className="p-0.5 border-b border-slate-100 dark:border-slate-800/80 grid grid-flow-col auto-cols-fr gap-1 bg-slate-50/90 dark:bg-slate-950/60 shrink-0 w-full">
               {counts.district > 0 && (
                 <button
                   type="button"
                   onClick={(e) => {
                     e.stopPropagation();
-                    setSelectedFilter('district');
+                    setSelectedFilter(selectedFilter === 'district' ? 'all' : 'district');
                   }}
                   title={`Districts (${counts.district})`}
-                  className={`px-1 py-1 rounded-md text-[9.5px] font-extrabold transition-all flex items-center justify-center gap-0.5 min-w-0 cursor-pointer ${
+                  className={`px-1.5 py-1 rounded-md text-[10px] font-extrabold transition-all flex items-center justify-center gap-1 min-w-0 cursor-pointer ${
                     selectedFilter === 'district'
-                      ? 'bg-sky-600 text-white shadow-2xs font-black'
-                      : 'text-sky-700 dark:text-sky-400 hover:bg-sky-50 dark:hover:bg-sky-950/50'
+                      ? 'bg-yellow-500 text-slate-900 shadow-2xs font-black'
+                      : 'text-yellow-700 dark:text-yellow-400 hover:bg-yellow-50 dark:hover:bg-yellow-950/50'
                   }`}
                 >
                   <Building2 className="w-2.5 h-2.5 shrink-0" />
                   <span className="truncate">Districts</span>
-                  <span className="opacity-85 font-mono text-[8.5px] shrink-0">({counts.district})</span>
+                  <span className="opacity-85 font-mono text-[9px] shrink-0">({counts.district})</span>
                 </button>
               )}
 
@@ -405,10 +404,10 @@ export const SearchBar: React.FC<SearchBarProps> = ({
                   type="button"
                   onClick={(e) => {
                     e.stopPropagation();
-                    setSelectedFilter('taluk');
+                    setSelectedFilter(selectedFilter === 'taluk' ? 'all' : 'taluk');
                   }}
                   title={`Taluks (${counts.taluk})`}
-                  className={`px-1 py-1 rounded-md text-[9.5px] font-extrabold transition-all flex items-center justify-center gap-0.5 min-w-0 cursor-pointer ${
+                  className={`px-1.5 py-1 rounded-md text-[10px] font-extrabold transition-all flex items-center justify-center gap-1 min-w-0 cursor-pointer ${
                     selectedFilter === 'taluk'
                       ? 'bg-indigo-600 text-white shadow-2xs font-black'
                       : 'text-indigo-700 dark:text-indigo-400 hover:bg-indigo-50 dark:hover:bg-indigo-950/50'
@@ -416,7 +415,7 @@ export const SearchBar: React.FC<SearchBarProps> = ({
                 >
                   <Compass className="w-2.5 h-2.5 shrink-0" />
                   <span className="truncate">Taluks</span>
-                  <span className="opacity-85 font-mono text-[8.5px] shrink-0">({counts.taluk})</span>
+                  <span className="opacity-85 font-mono text-[9px] shrink-0">({counts.taluk})</span>
                 </button>
               )}
 
@@ -425,18 +424,18 @@ export const SearchBar: React.FC<SearchBarProps> = ({
                   type="button"
                   onClick={(e) => {
                     e.stopPropagation();
-                    setSelectedFilter('village');
+                    setSelectedFilter(selectedFilter === 'village' ? 'all' : 'village');
                   }}
                   title={`Villages (${counts.village})`}
-                  className={`px-1 py-1 rounded-md text-[9.5px] font-extrabold transition-all flex items-center justify-center gap-0.5 min-w-0 cursor-pointer ${
+                  className={`px-1.5 py-1 rounded-md text-[10px] font-extrabold transition-all flex items-center justify-center gap-1 min-w-0 cursor-pointer ${
                     selectedFilter === 'village'
-                      ? 'bg-emerald-600 text-white shadow-2xs font-black'
-                      : 'text-emerald-700 dark:text-emerald-400 hover:bg-emerald-50 dark:hover:bg-emerald-950/50'
+                      ? 'bg-teal-600 text-white shadow-2xs font-black'
+                      : 'text-teal-700 dark:text-teal-400 hover:bg-teal-50 dark:hover:bg-teal-950/50'
                   }`}
                 >
                   <Home className="w-2.5 h-2.5 shrink-0" />
                   <span className="truncate">Villages</span>
-                  <span className="opacity-85 font-mono text-[8.5px] shrink-0">({counts.village})</span>
+                  <span className="opacity-85 font-mono text-[9px] shrink-0">({counts.village})</span>
                 </button>
               )}
 
@@ -445,10 +444,10 @@ export const SearchBar: React.FC<SearchBarProps> = ({
                   type="button"
                   onClick={(e) => {
                     e.stopPropagation();
-                    setSelectedFilter('parcel');
+                    setSelectedFilter(selectedFilter === 'parcel' ? 'all' : 'parcel');
                   }}
                   title={`Surveys (${counts.parcel})`}
-                  className={`px-1 py-1 rounded-md text-[9.5px] font-extrabold transition-all flex items-center justify-center gap-0.5 min-w-0 cursor-pointer ${
+                  className={`px-1.5 py-1 rounded-md text-[10px] font-extrabold transition-all flex items-center justify-center gap-1 min-w-0 cursor-pointer ${
                     selectedFilter === 'parcel'
                       ? 'bg-rose-600 text-white shadow-2xs font-black'
                       : 'text-rose-700 dark:text-rose-400 hover:bg-rose-50 dark:hover:bg-rose-950/50'
@@ -456,7 +455,7 @@ export const SearchBar: React.FC<SearchBarProps> = ({
                 >
                   <FileSpreadsheet className="w-2.5 h-2.5 shrink-0" />
                   <span className="truncate">Surveys</span>
-                  <span className="opacity-85 font-mono text-[8.5px] shrink-0">({counts.parcel})</span>
+                  <span className="opacity-85 font-mono text-[9px] shrink-0">({counts.parcel})</span>
                 </button>
               )}
             </div>
@@ -464,63 +463,10 @@ export const SearchBar: React.FC<SearchBarProps> = ({
 
           {/* 2. Results List for Selected Category Tab */}
           <div ref={listRef} className="overflow-y-auto divide-y divide-slate-100 dark:divide-slate-800/40 max-h-64">
-            {query.trim().length === 0 ? (
-              /* Empty Query: Compact Recent Searches only */
-              recentSearches.length > 0 ? (
-                <div className="p-2 space-y-2">
-                  <div>
-                    <div className="flex items-center justify-between px-1 mb-1">
-                      <span className="text-[10px] font-bold uppercase tracking-wider text-slate-400 dark:text-slate-500 flex items-center gap-1">
-                        <Clock className="w-2.5 h-2.5" />
-                        Recent
-                      </span>
-                      <button
-                        type="button"
-                        onClick={clearRecentSearches}
-                        className="text-[10px] font-bold text-rose-600 dark:text-rose-400 hover:text-rose-700 dark:hover:text-rose-300 flex items-center gap-0.5 cursor-pointer transition-colors"
-                      >
-                        <Trash2 className="w-2.5 h-2.5 text-rose-600 dark:text-rose-400" />
-                        Clear
-                      </button>
-                    </div>
-
-                    <div className="space-y-0.5">
-                      {recentSearches.map((r, i) => {
-                        const conf = LEVEL_CONFIG[r.level] || LEVEL_CONFIG.village;
-                        const IconComp = conf.Icon;
-                        return (
-                          <button
-                            key={`recent-${r.code}-${i}`}
-                            type="button"
-                            onClick={() => handleSelect(r)}
-                            className="w-full px-2 py-1 rounded-lg text-left hover:bg-slate-100 dark:hover:bg-slate-800/70 transition-colors flex items-center gap-2 group cursor-pointer text-xs"
-                          >
-                            <div
-                              className="shrink-0 w-4.5 h-4.5 rounded-full flex items-center justify-center"
-                              style={{ backgroundColor: conf.bgLight, color: conf.color }}
-                            >
-                              <IconComp className="w-2.5 h-2.5" />
-                            </div>
-                            <span className="font-semibold text-slate-800 dark:text-slate-100 truncate shrink-0">
-                              {r.name}
-                            </span>
-                            <span className={`text-[8.5px] font-extrabold uppercase px-1 py-0 rounded border ${conf.badgeClass} shrink-0`}>
-                              {conf.label}
-                            </span>
-                            <span className="text-[10.5px] text-slate-400 dark:text-slate-500 truncate flex-1 font-normal">
-                              • {r.location_text || r.code}
-                            </span>
-                          </button>
-                        );
-                      })}
-                    </div>
-                  </div>
-                </div>
-              ) : null
-            ) : filteredResults.length === 0 ? (
+            {filteredResults.length === 0 ? (
               /* No Results in Selected Tab State */
               <div className="p-3 text-center text-xs text-slate-400 dark:text-slate-500">
-                No matching {selectedFilter}s found for "{query}"
+                No matching {selectedFilter === 'all' ? 'places' : `${selectedFilter}s`} found for "{query}"
               </div>
             ) : (
               /* Category Items */
@@ -528,13 +474,16 @@ export const SearchBar: React.FC<SearchBarProps> = ({
                 {filteredResults.map((r, i) => {
                   const isHighlighted = i === selectedIndex;
                   const conf = LEVEL_CONFIG[r.level] || LEVEL_CONFIG.village;
+                  const IconComp = conf.Icon;
                   let subtitle = '';
                   if (r.level === 'taluk') {
-                    subtitle = r.district_name || '';
+                    subtitle = r.district_name ? `District: ${r.district_name}` : (r.location_text || '');
                   } else if (r.level === 'village') {
-                    subtitle = [r.taluk_name, r.district_name].filter(Boolean).join(' · ');
+                    subtitle = [r.taluk_name ? `Taluk: ${r.taluk_name}` : '', r.district_name ? `District: ${r.district_name}` : ''].filter(Boolean).join(' • ') || (r.location_text || '');
                   } else if (r.level === 'parcel') {
-                    subtitle = [r.village_name, r.taluk_name].filter(Boolean).join(' · ');
+                    subtitle = [r.village_name ? `Village: ${r.village_name}` : '', r.taluk_name ? `Taluk: ${r.taluk_name}` : ''].filter(Boolean).join(' • ') || (r.location_text || '');
+                  } else if (r.level === 'district') {
+                    subtitle = ''; // District has no base subtitle/tag per user request
                   }
                   const codeText = (r.code_display || r.code).replace(/^Code:\s*/i, '').replace(/^Survey\s*/i, '');
 
@@ -550,20 +499,33 @@ export const SearchBar: React.FC<SearchBarProps> = ({
                           : 'hover:bg-slate-50 dark:hover:bg-slate-800/60 text-slate-800 dark:text-slate-200'
                       }`}
                     >
-                      {/* Left: Name + subtitle (taluk · district) */}
-                      <div className="flex flex-col min-w-0 flex-1">
-                        <span className="font-bold truncate text-slate-900 dark:text-slate-100 text-xs leading-tight">
-                          <HighlightedText text={r.name} query={query} />
-                        </span>
-                        {subtitle && (
-                          <span className="text-[9.5px] text-slate-400 dark:text-slate-500 font-normal truncate leading-tight mt-0.5">
-                            {subtitle}
-                          </span>
-                        )}
+                      {/* Left: Icon + Name + Badge + Subtitle */}
+                      <div className="flex items-center gap-2 min-w-0 flex-1">
+                        <div
+                          className="shrink-0 w-5 h-5 rounded-md flex items-center justify-center shadow-2xs"
+                          style={{ backgroundColor: conf.bgLight, color: conf.color }}
+                        >
+                          <IconComp className="w-3 h-3" />
+                        </div>
+                        <div className="flex flex-col min-w-0 flex-1">
+                          <div className="flex items-center gap-1.5 min-w-0">
+                            <span className="font-bold truncate text-slate-900 dark:text-slate-100 text-xs leading-tight">
+                              <HighlightedText text={r.name} query={query} />
+                            </span>
+                            <span className={`text-[8px] font-black uppercase px-1 py-0.2 rounded border ${conf.badgeClass} shrink-0`}>
+                              {conf.label}
+                            </span>
+                          </div>
+                          {subtitle && (
+                            <span className="text-[9.5px] text-slate-400 dark:text-slate-500 font-normal truncate leading-tight mt-0.5">
+                              {subtitle}
+                            </span>
+                          )}
+                        </div>
                       </div>
 
-                      {/* Right: Code pill only */}
-                      <span className="text-[10px] font-mono font-bold px-1.5 py-0.2 rounded-md bg-slate-100 dark:bg-slate-800 text-slate-700 dark:text-slate-300 border border-slate-200/80 dark:border-slate-700/80 whitespace-nowrap shrink-0 ml-1">
+                      {/* Right: Code pill */}
+                      <span className="text-[10px] font-mono font-bold px-1.5 py-0.5 rounded-md bg-slate-100 dark:bg-slate-800 text-slate-700 dark:text-slate-300 border border-slate-200/80 dark:border-slate-700/80 whitespace-nowrap shrink-0 ml-1 shadow-2xs">
                         <HighlightedText text={codeText} query={query} />
                       </span>
                     </button>

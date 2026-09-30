@@ -33,6 +33,7 @@ BINARY_TYPES = (
     "application/zip",
     "application/vnd.google-earth.kmz",
     "application/dxf",
+    "application/vnd.pmtiles",
 )
 
 
@@ -56,13 +57,26 @@ def _load_functions() -> List[Tuple[List[Route], Any]]:
 
 class GisRequestHandler(BaseHTTPRequestHandler):
     server_version = "GISLocalDev/1.0"
+    protocol_version = "HTTP/1.1"
     functions: List[Tuple[List[Route], Any]] = []
 
+    def do_HEAD(self):
+        try:
+            self._handle("HEAD")
+        except Exception:
+            traceback.print_exc()
+
     def do_GET(self):
-        self._handle("GET")
+        try:
+            self._handle("GET")
+        except Exception:
+            traceback.print_exc()
 
     def do_POST(self):
-        self._handle("POST")
+        try:
+            self._handle("POST")
+        except Exception:
+            traceback.print_exc()
 
     def do_OPTIONS(self):
         self.send_response(204)
@@ -73,6 +87,28 @@ class GisRequestHandler(BaseHTTPRequestHandler):
     def _handle(self, method: str):
         parsed = urlparse(self.path)
         path = unquote(parsed.path)
+        sys.stderr.write(f"[request] {method} {path}\n")
+        sys.stderr.flush()
+
+        if method == "GET" and path == "/":
+            html = (
+                "<!DOCTYPE html><html><head>"
+                "<meta http-equiv='refresh' content='0; url=http://localhost:5173/' />"
+                "<title>GIS Layer Navigator</title></head>"
+                "<body style='font-family:system-ui,sans-serif;padding:40px;background:#0f172a;color:#f8fafc;text-align:center;'>"
+                "<h2>GIS Layer Navigator API Server</h2>"
+                "<p>The backend API is running on port 8000.</p>"
+                "<p>Redirecting to the Map UI at <a style='color:#38bdf8;font-weight:bold;' href='http://localhost:5173/'>http://localhost:5173/</a> ...</p>"
+                "<script>window.location.href='http://localhost:5173/';</script>"
+                "</body></html>"
+            ).encode("utf-8")
+            self.send_response(200)
+            self.send_header("Content-Type", "text/html; charset=utf-8")
+            self._send_cors()
+            self.send_header("Content-Length", str(len(html)))
+            self.end_headers()
+            self.wfile.write(html)
+            return
 
         match = self._match(method, path)
         if match is None:
@@ -80,7 +116,7 @@ class GisRequestHandler(BaseHTTPRequestHandler):
             return
 
         handler, resource, path_params = match
-        body = self._read_body()
+        body, is_b64 = self._read_body()
 
         event = {
             "resource": resource,
@@ -94,31 +130,41 @@ class GisRequestHandler(BaseHTTPRequestHandler):
             "pathParameters": path_params,
             "requestContext": {"stage": "local", "resourcePath": resource},
             "body": body,
-            "isBase64Encoded": False,
+            "isBase64Encoded": is_b64,
         }
 
         try:
             result = handler(event, _LocalContext())
+            self._send_result(result)
         except Exception:
             traceback.print_exc()
-            self._send_json(500, {"detail": "Handler raised; see server log."})
+            try:
+                self._send_json(500, {"detail": "Handler raised; see server log."})
+            except Exception:
+                pass
             return
 
-        self._send_result(result)
-
     def _match(self, method: str, path: str):
+        lookup_method = "GET" if method == "HEAD" else method
         for routes, handler in self.functions:
             for route in routes:
-                params = route.match(method, path)
+                params = route.match(lookup_method, path)
                 if params is not None:
                     return handler, route.template, params
         return None
 
-    def _read_body(self) -> Optional[str]:
+    def _read_body(self) -> Tuple[Optional[str], bool]:
         length = int(self.headers.get("Content-Length") or 0)
         if not length:
-            return None
-        return self.rfile.read(length).decode("utf-8", errors="replace")
+            return None, False
+        data = self.rfile.read(length)
+        content_type = (self.headers.get("Content-Type") or "").lower()
+        if "json" in content_type or "text" in content_type or "urlencoded" in content_type:
+            try:
+                return data.decode("utf-8"), False
+            except UnicodeDecodeError:
+                pass
+        return base64.b64encode(data).decode("ascii"), True
 
     def _send_result(self, result: Dict[str, Any]):
         status = int(result.get("statusCode") or 200)
@@ -127,12 +173,17 @@ class GisRequestHandler(BaseHTTPRequestHandler):
         payload = base64.b64decode(raw) if result.get("isBase64Encoded") else raw.encode("utf-8")
 
         self.send_response(status)
+        is_head = (self.command == "HEAD")
+        content_len = headers.get("Content-Length") or headers.get("content-length") or str(len(payload))
         for key, value in headers.items():
+            if key.lower() == "content-length":
+                continue
             self.send_header(key, str(value))
-        self.send_header("Content-Length", str(len(payload)))
+        self.send_header("Content-Length", str(content_len))
         self.end_headers()
-        if payload:
+        if payload and not is_head:
             self.wfile.write(payload)
+        self.wfile.flush()
 
     def _send_json(self, status: int, payload: Dict[str, Any]):
         body = json.dumps(payload).encode("utf-8")
@@ -150,6 +201,7 @@ class GisRequestHandler(BaseHTTPRequestHandler):
 
     def log_message(self, fmt, *fmt_args):
         sys.stderr.write("[local] %s\n" % (fmt % fmt_args))
+        sys.stderr.flush()
 
 
 class _LocalContext:
@@ -167,7 +219,7 @@ def main() -> int:
     os.environ.setdefault("DEBUG", "true")
     os.environ.setdefault(
         "GIS_DATA_URI",
-        os.path.abspath(os.path.join(os.path.dirname(__file__), "..", "data")),
+        os.getenv("GIS_DATA_URI", "s3://gis-layer-navigator-data-980610527749-dev/gis"),
     )
     os.environ.setdefault(
         "GIS_LOCAL_CACHE_DIR",

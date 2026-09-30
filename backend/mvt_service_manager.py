@@ -97,6 +97,12 @@ class VectorTileManager:
 
         size_mb = gisfs.getsize(geojson_path) / (1024.0 * 1024.0)
         if size_mb > config.TILE_INDEX_BUILD_LIMIT_MB:
+            if gisfs.exists(remote):
+                materialized = gisfs.materialize(remote)
+                if materialized:
+                    self._local_index[layer_id] = materialized
+                    self._load_metadata(layer_id)
+                    return True
             print(
                 "[VectorTileManager] No published index for '%s' and the source is "
                 "%.0f MB (limit %d MB). Run scripts/build_tile_indexes.py and upload "

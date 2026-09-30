@@ -115,37 +115,70 @@ def build_export(level: str, code: str,
 
 def _export_parcel(code, district_code, taluk_code, village_code, ft, fmt,
                    base_survey, name_prefix, base_name) -> Optional[Export]:
+    parts = [p.strip() for p in (code or "").split("_") if p.strip()]
+    if len(parts) >= 4:
+        district_code = district_code or parts[0]
+        taluk_code = taluk_code or parts[1]
+        village_code = village_code or parts[2]
+        if not base_survey:
+            base_survey = "_".join(parts[3:])
+
     target_sno = str(base_survey).strip() if base_survey else ""
     if not target_sno:
-        target_sno = code.split("_")[-1] if "_" in code else code
-    target_sno = str(target_sno).strip()
+        target_sno = parts[-1] if parts else code
+    target_sno = str(target_sno).strip().replace("_", "/")
+
+    # Target village code for village level fallback
+    vil_combo = ""
+    if district_code and taluk_code and village_code:
+        vil_combo = f"{district_code}_{taluk_code}_{village_code}"
+    elif len(parts) >= 3:
+        vil_combo = f"{parts[0]}_{parts[1]}_{parts[2]}"
+    else:
+        vil_combo = village_code or code
+
+    # Support comma-separated surveys in code or base_survey
+    target_snos = set()
+    for s in target_sno.split(","):
+        s_clean = s.strip().lower()
+        if s_clean:
+            target_snos.add(s_clean)
+            if "/" in s_clean:
+                target_snos.add(s_clean.split("/")[0].strip())
 
     merged_feats: List[Dict[str, Any]] = []
-    if ft == "both":
-        for sub_ft in ("vector", "fmb"):
+    types_to_try = ("vector", "fmb") if ft in ("both", "vector") else ("fmb", "vector")
+    for sub_ft in types_to_try:
+        try:
             res = run_sync(build_merged_geojson(
-                "parcel", code, q_dist=district_code, q_tal=taluk_code,
+                "parcel", vil_combo, q_dist=district_code, q_tal=taluk_code,
                 q_vil=village_code, file_type=sub_ft, survey_no=target_sno,
             ))
-            merged_feats.extend((res.get("geojson") or {}).get("features") or [])
-    else:
-        res = run_sync(build_merged_geojson(
-            "parcel", code, q_dist=district_code, q_tal=taluk_code,
-            q_vil=village_code, file_type=ft, survey_no=target_sno,
-        ))
-        merged_feats = (res.get("geojson") or {}).get("features") or []
+            feats = (res.get("geojson") or {}).get("features") or []
+            if feats:
+                merged_feats.extend(feats)
+                break
+        except Exception:
+            pass
 
     if not merged_feats:
-        # Fall back to scanning the village layer for a matching survey number.
-        fallback = run_sync(build_merged_geojson(
-            "village", code, q_dist=district_code, q_tal=taluk_code,
-            q_vil=village_code, file_type="vector" if ft == "vector" else "fmb",
-        ))
-        clean_t = target_sno.lower()
-        for f in (fallback.get("geojson") or {}).get("features") or []:
-            p_sno = str((f.get("properties") or {}).get("survey_no") or "").strip().lower()
-            if p_sno == clean_t or p_sno.startswith("%s/" % clean_t):
-                merged_feats.append(f)
+        # Fall back to scanning the village layer for matching survey numbers.
+        for sub_ft in ("vector", "fmb"):
+            try:
+                fallback = run_sync(build_merged_geojson(
+                    "village", vil_combo, q_dist=district_code, q_tal=taluk_code,
+                    q_vil=village_code, file_type=sub_ft,
+                ))
+                for f in (fallback.get("geojson") or {}).get("features") or []:
+                    props = f.get("properties") or {}
+                    raw_sno = str(props.get("survey_no") or props.get("SURVEY_NO") or props.get("sno") or props.get("KIDE") or props.get("name") or "").strip().lower()
+                    base_sno = raw_sno.split("/")[0].strip() if "/" in raw_sno else raw_sno
+                    if any(t == raw_sno or t == base_sno or raw_sno.startswith(f"{t}/") for t in target_snos):
+                        merged_feats.append(f)
+                if merged_feats:
+                    break
+            except Exception:
+                pass
 
     if not merged_feats:
         raise HttpError(404, "No parcel features found for survey '%s'." % target_sno)

@@ -310,3 +310,52 @@ def _collect_village_features_for_clip(
                     print(f"[spatial_clip_service] FMB merged GeoJSON spatial query error: {e}")
 
     return features
+
+
+def get_cart_layer_features_in_bbox(
+    layer_id: str,
+    minx: float,
+    miny: float,
+    maxx: float,
+    maxy: float,
+    vector_tile_mgr: Optional[Any] = None,
+    uri: Optional[str] = None,
+) -> List[Dict[str, Any]]:
+    """Query features within bbox using pre-built SQLite spatial index in milliseconds."""
+    import json as _json
+
+    if vector_tile_mgr:
+        try:
+            vector_tile_mgr.ensure_spatial_index(layer_id, uri)
+            conn = vector_tile_mgr.get_connection(layer_id)
+            if conn:
+                cur = conn.cursor()
+                cur.execute("""
+                    SELECT f.geom_type, f.coords_json, f.props_json
+                    FROM spatial_index s JOIN features f ON s.id = f.id
+                    WHERE s.minx <= ? AND s.maxx >= ? AND s.miny <= ? AND s.maxy >= ?
+                """, (maxx, minx, maxy, miny))
+                rows = cur.fetchall()
+                feats = []
+                for geom_type, coords_json, props_json in rows:
+                    try:
+                        coords = _json.loads(coords_json)
+                        props = _json.loads(props_json) if props_json else {}
+                        feats.append({
+                            "type": "Feature",
+                            "geometry": {"type": geom_type, "coordinates": coords},
+                            "properties": props,
+                        })
+                    except Exception:
+                        pass
+                # Return index query results directly (even if empty, index is authoritative)
+                return feats
+        except Exception as e:
+            print(f"[spatial_clip_service] Spatial index query error for {layer_id}: {e}")
+
+    # Fallback to loading full geojson only if index is unavailable
+    if uri and gisfs.exists(uri):
+        raw = load_geojson_file(uri)
+        if raw:
+            return raw.get("features", []) if raw.get("type") == "FeatureCollection" else [raw]
+    return []

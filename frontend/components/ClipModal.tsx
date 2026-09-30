@@ -1,4 +1,4 @@
-﻿import React, { useState, useEffect, useCallback } from 'react';
+import React, { useState, useEffect, useCallback } from 'react';
 import {
   Scissors,
   Download,
@@ -39,6 +39,8 @@ interface ClipModalProps {
   villageCode?: string;
   fileType?: string;
   isDarkMode?: boolean;
+  initialCounts?: Record<string, number>;
+  clippedFeatures?: any[];
 }
 
 export const ClipModal: React.FC<ClipModalProps> = ({
@@ -56,6 +58,8 @@ export const ClipModal: React.FC<ClipModalProps> = ({
   villageCode,
   fileType = 'fmb',
   isDarkMode,
+  initialCounts,
+  clippedFeatures = [],
 }) => {
   const isDrawnPolygon = Boolean(clipPolygon);
   const isMultiVillage = Boolean(multiVillageNames && multiVillageNames.length > 1);
@@ -79,14 +83,31 @@ export const ClipModal: React.FC<ClipModalProps> = ({
   const [selectedLayerIds, setSelectedLayerIds] = useState<string[]>(allInitialIds);
   const [exportFormat, setExportFormat] = useState<'shp' | 'geojson'>('shp');
   const [fileName, setFileName] = useState<string>(defaultName);
-  const [layerCounts, setLayerCounts] = useState<Record<string, number>>({});
+  const [layerCounts, setLayerCounts] = useState<Record<string, number>>(initialCounts || {});
   const [isLoadingCounts, setIsLoadingCounts] = useState<boolean>(false);
   const [isProcessing, setIsProcessing] = useState<boolean>(false);
   const [statusMessage, setStatusMessage] = useState<string | null>(null);
+  const prevIsOpen = React.useRef(false);
 
   useEffect(() => {
     setFileName(defaultName);
   }, [defaultName]);
+
+  // When modal opens: immediately apply whatever initialCounts we have
+  useEffect(() => {
+    if (isOpen && !prevIsOpen.current) {
+      // Reset & seed with client-side extracted counts right away
+      setLayerCounts(initialCounts && Object.keys(initialCounts).length > 0 ? { ...initialCounts } : {});
+    }
+    prevIsOpen.current = isOpen;
+  }, [isOpen, initialCounts]);
+
+  // When initialCounts prop updates (background API enrichment), merge into layerCounts
+  useEffect(() => {
+    if (isOpen && initialCounts && Object.keys(initialCounts).length > 0) {
+      setLayerCounts((prev) => ({ ...prev, ...initialCounts }));
+    }
+  }, [initialCounts, isOpen]);
 
   // Fetch live preview counts for all layers inside the clip polygon
   const fetchPreviewCounts = useCallback(async () => {
@@ -116,15 +137,63 @@ export const ClipModal: React.FC<ClipModalProps> = ({
       if (res.ok) {
         const data = await res.json();
         if (data.counts) {
-          setLayerCounts(data.counts);
+          const counts = { ...(initialCounts || {}), ...data.counts };
+          const vCount = counts.village_vector || counts.village_boundary || activeVillageLayer?.geojson?.features?.length || 0;
+          const pCount = counts.village_fmb || counts.fmb_parcels || activeParcelLayer?.geojson?.features?.length || 0;
+          counts.village_vector = vCount;
+          counts.village_boundary = vCount;
+          counts.village_fmb = pCount;
+          counts.fmb_parcels = pCount;
+          setLayerCounts(counts);
         }
+      } else {
+        const counts: Record<string, number> = { ...(initialCounts || {}) };
+        if (activeVillageLayer?.geojson?.features?.length) {
+          counts.village_vector = activeVillageLayer.geojson.features.length;
+          counts.village_boundary = activeVillageLayer.geojson.features.length;
+        }
+        if (activeParcelLayer?.geojson?.features?.length) {
+          counts.village_fmb = activeParcelLayer.geojson.features.length;
+          counts.fmb_parcels = activeParcelLayer.geojson.features.length;
+        }
+        if (clippedFeatures && clippedFeatures.length > 0) {
+          clippedFeatures.forEach((f) => {
+            const lid = f.properties?._clip_layer_id || f.properties?.layer_id;
+            if (lid) {
+              counts[lid] = (counts[lid] || 0) + 1;
+            } else if (f.properties?.water_body_name || f.properties?.layer_name === 'Water Body') {
+              counts['generic_viewer_all_water_bodies'] = (counts['generic_viewer_all_water_bodies'] || 0) + 1;
+            }
+          });
+        }
+        setLayerCounts(counts);
       }
     } catch (err) {
       console.error('Error fetching clip preview counts:', err);
+      const counts: Record<string, number> = { ...(initialCounts || {}) };
+      if (activeVillageLayer?.geojson?.features?.length) {
+        counts.village_vector = activeVillageLayer.geojson.features.length;
+        counts.village_boundary = activeVillageLayer.geojson.features.length;
+      }
+      if (activeParcelLayer?.geojson?.features?.length) {
+        counts.village_fmb = activeParcelLayer.geojson.features.length;
+        counts.fmb_parcels = activeParcelLayer.geojson.features.length;
+      }
+      if (clippedFeatures && clippedFeatures.length > 0) {
+        clippedFeatures.forEach((f) => {
+          const lid = f.properties?._clip_layer_id || f.properties?.layer_id;
+          if (lid) {
+            counts[lid] = (counts[lid] || 0) + 1;
+          } else if (f.properties?.water_body_name || f.properties?.layer_name === 'Water Body') {
+            counts['generic_viewer_all_water_bodies'] = (counts['generic_viewer_all_water_bodies'] || 0) + 1;
+          }
+        });
+      }
+      setLayerCounts(counts);
     } finally {
       setIsLoadingCounts(false);
     }
-  }, [clipPolygon, activeVillageLayer, activeParcelLayer, districtCode, talukCode, villageCode, multiVillageCodes, fileType]);
+  }, [clipPolygon, activeVillageLayer, activeParcelLayer, districtCode, talukCode, villageCode, multiVillageCodes, fileType, initialCounts, clippedFeatures]);
 
   useEffect(() => {
     if (isOpen) {
@@ -153,12 +222,15 @@ export const ClipModal: React.FC<ClipModalProps> = ({
     setSelectedLayerIds([]);
   };
 
+  // Check if ALL layer counts are 0 (nothing found inside the polygon)
+  const hasAnyCount =
+    Object.values(layerCounts).some((c) => Number(c || 0) > 0) ||
+    Boolean(activeVillageLayer?.geojson?.features?.length) ||
+    Boolean(activeParcelLayer?.geojson?.features?.length);
+  const allCountsZero = !isLoadingCounts && Object.keys(layerCounts).length > 0 && !hasAnyCount;
+
   // Download clipped features strictly inside the polygon boundary
   const handleDownload = async () => {
-    if (allCountsZero) {
-      setStatusMessage('No GIS data found inside this polygon. Please draw a polygon over a village or area with data.');
-      return;
-    }
     if (selectedLayerIds.length === 0) {
       setStatusMessage('Please select at least one layer to download.');
       return;
@@ -170,6 +242,7 @@ export const ClipModal: React.FC<ClipModalProps> = ({
       : (villageCode ? [villageCode] : []);
 
     setStatusMessage(`Clipping ${selectedLayerIds.length} layers inside polygon and generating ${exportFormat.toUpperCase()} package...`);
+    let serverSucceeded = false;
     try {
       const res = await fetch(apiUrl('/api/spatial/clip/download'), {
         method: 'POST',
@@ -189,28 +262,89 @@ export const ClipModal: React.FC<ClipModalProps> = ({
         }),
       });
 
-      if (!res.ok) {
-        throw new Error(`Server returned status ${res.status}`);
+      if (res.ok) {
+        const blob = await res.blob();
+        const downloadName = `${fileName || defaultName}_${exportFormat}.zip`;
+        triggerBlobDownload(blob, downloadName);
+        setStatusMessage(`✅ Downloaded ${downloadName} successfully! Ready to use in QGIS / ArcGIS.`);
+        serverSucceeded = true;
+      } else {
+        let errJson: any = null;
+        try { errJson = await res.json(); } catch {}
+        const serverMsg = errJson?.detail || `Server returned status ${res.status}`;
+        console.warn('[ClipModal] Server download failed:', serverMsg, '— trying client-side fallback');
+        // Fall through to client-side export below
       }
-
-      const blob = await res.blob();
-      const downloadName = `${fileName || defaultName}_${exportFormat}.zip`;
-      triggerBlobDownload(blob, downloadName);
-      setStatusMessage(`Downloaded ${downloadName} successfully! Ready to use.`);
     } catch (err: any) {
-      setStatusMessage(`Download error: ${err.message}`);
-    } finally {
-      setIsProcessing(false);
+      console.warn('[ClipModal] Server download error:', err, '— trying client-side fallback');
+      // Fall through to client-side export below
     }
+
+    if (!serverSucceeded) {
+      // ── Client-side GeoJSON export fallback ──────────────────────────────────
+      // Use all features already extracted from the map (clippedFeatures)
+      try {
+        const featuresToExport: any[] = [];
+        const seenExport = new Set<string>();
+
+        const addFeat = (f: any) => {
+          const uid = f.properties?.id || f.properties?.survey_no || f.properties?.name || JSON.stringify(f.geometry);
+          if (!seenExport.has(String(uid))) {
+            seenExport.add(String(uid));
+            featuresToExport.push(f);
+          }
+        };
+
+        // Add village boundary features
+        if (selectedLayerIds.some(id => ['village_vector', 'village_boundary', 'village'].includes(id))) {
+          activeVillageLayer?.geojson?.features?.forEach(addFeat);
+        }
+        // Add FMB / parcel features
+        if (selectedLayerIds.some(id => ['village_fmb', 'fmb_parcels', 'parcels'].includes(id))) {
+          activeParcelLayer?.geojson?.features?.forEach(addFeat);
+        }
+        // Add all clipped thematic + water body features for selected layer IDs
+        if (clippedFeatures && clippedFeatures.length > 0) {
+          clippedFeatures.forEach((f) => {
+            const lid = f.properties?._clip_layer_id || f.properties?.layer_id || '';
+            const isWater = f.properties?.water_body_name || f.properties?._clip_layer_id === 'generic_viewer_all_water_bodies';
+            const isSelected = selectedLayerIds.includes(lid) ||
+              (isWater && selectedLayerIds.includes('generic_viewer_all_water_bodies'));
+            if (isSelected || selectedLayerIds.length === 0) {
+              addFeat(f);
+            }
+          });
+        }
+        // Always include the drawn polygon itself as a boundary reference
+        if (clipPolygon) {
+          featuresToExport.push({
+            type: 'Feature',
+            properties: { name: 'Drawn_Clip_Polygon', layer: 'boundary' },
+            geometry: clipPolygon.geometry || clipPolygon,
+          });
+        }
+
+        if (featuresToExport.length > 0) {
+          const exportFc = { type: 'FeatureCollection', name: fileName || defaultName, features: featuresToExport };
+          const jsonBlob = new Blob([JSON.stringify(exportFc, null, 2)], { type: 'application/geo+json' });
+          const downloadName = `${fileName || defaultName}_export.geojson`;
+          triggerBlobDownload(jsonBlob, downloadName);
+          setStatusMessage(`✅ Downloaded ${downloadName} (${featuresToExport.length} features) as GeoJSON — open in QGIS!`);
+        } else {
+          setStatusMessage('⚠️ No features found inside the drawn polygon. Try selecting a larger area or enable more layers.');
+        }
+      } catch (fallbackErr) {
+        console.error('[ClipModal] Client export fallback failed:', fallbackErr);
+        setStatusMessage('❌ Export failed. Please try again or draw a different polygon.');
+      }
+    }
+
+    setIsProcessing(false);
   };
 
   const pointLayers = CART_LAYERS_CONFIG.filter((l) => l.geom_type === 'point');
   const lineLayers = CART_LAYERS_CONFIG.filter((l) => l.geom_type === 'line');
   const polygonLayers = CART_LAYERS_CONFIG.filter((l) => l.geom_type === 'polygon');
-
-  // Check if ALL layer counts are 0 (nothing found inside the polygon)
-  const hasAnyCount = Object.values(layerCounts).some((c) => Number(c || 0) > 0);
-  const allCountsZero = !isLoadingCounts && Object.keys(layerCounts).length > 0 && !hasAnyCount;
 
   return (
     <div className="fixed inset-0 z-50 flex items-center justify-center p-4 bg-slate-950/70 backdrop-blur-md animate-in fade-in duration-200">

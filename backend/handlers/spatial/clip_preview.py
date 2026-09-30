@@ -21,6 +21,7 @@ from services.spatial_clip_service import (
     _clip_feature_list,
     _collect_village_features_for_clip,
     _parse_clip_geometry,
+    get_cart_layer_features_in_bbox,
 )
 
 #: Preview caps — enough to draw, small enough to return inline.
@@ -60,6 +61,7 @@ def handle(request: Request) -> Dict[str, Any]:
     if v_vector:
         clipped = collect(v_vector, "village_vector", "#10b981", "polygon", VILLAGE_SAMPLE)
         layer_counts["village_boundary"] = len(clipped)
+        layer_counts["village_vector"] = len(clipped)
 
     # 2. FMB subdivisions and survey parcels.
     v_fmb = _collect_village_features_for_clip(
@@ -68,6 +70,7 @@ def handle(request: Request) -> Dict[str, Any]:
     if v_fmb:
         clipped = collect(v_fmb, "village_fmb", "#06b6d4", "polygon", PARCEL_SAMPLE)
         layer_counts["fmb_parcels"] = len(clipped)
+        layer_counts["village_fmb"] = len(clipped)
 
     # 3. Thematic cart layers.
     selected_ids = (
@@ -79,11 +82,15 @@ def handle(request: Request) -> Dict[str, Any]:
         if not defn:
             continue
         uri = find_cart_layer_file(lid)
-        if not uri or not gisfs.exists(uri):
-            continue
         try:
-            feats = _layer_features(lid, uri)
-            if feats is None:
+            feats = []
+            if minx is not None and miny is not None:
+                feats = get_cart_layer_features_in_bbox(
+                    lid, minx, miny, maxx, maxy, vector_tile_manager, uri
+                )
+            if not feats and uri and gisfs.exists(uri):
+                feats = _layer_features(lid, uri)
+            if not feats:
                 continue
             collect(feats, lid, defn.get("color", "#38bdf8"),
                     defn.get("geom_type", "point"), CART_SAMPLE)

@@ -7,29 +7,29 @@
 import { GisLevel } from '../types';
 
 export const MULTI_SELECTION_PALETTE = [
-  '#0284c7', // Sky Blue
-  '#8b5cf6', // Purple
-  '#10b981', // Emerald Green
-  '#f59e0b', // Amber
-  '#ec4899', // Pink
-  '#06b6d4', // Cyan
-  '#f97316', // Orange
-  '#a855f7', // Violet
+  '#06b6d4', // Vibrant Electric Cyan (Item 1)
+  '#f59e0b', // Vibrant Gold / Amber (Item 2)
+  '#ec4899', // Vivid Hot Pink (Item 3)
+  '#3b82f6', // Bright Royal Blue (Item 4)
+  '#f97316', // Vibrant Orange (Item 5)
+  '#10b981', // Emerald Green (Item 6)
+  '#a855f7', // Vivid Purple (Item 7)
+  '#e11d48', // Crimson Rose (Item 8)
 ];
 
 export const DEFAULT_LAYER_COLORS: Record<GisLevel | 'subdivision', string> = {
-  district: '#0284c7',
-  taluk: '#8b5cf6',
-  village: '#10b981',
-  parcel: '#f59e0b',
+  district: '#facc15',
+  taluk: '#9333ea',
+  village: '#06b6d4',
+  parcel: '#22c55e',
   subdivision: '#22c55e',
 };
 
 export const GIS_LEVEL_BADGE_COLORS: Record<GisLevel, { bg: string; text: string; border: string }> = {
   district: {
-    bg: 'bg-sky-50 dark:bg-sky-950/40',
-    text: 'text-sky-700 dark:text-sky-300',
-    border: 'border-sky-200 dark:border-sky-800',
+    bg: 'bg-yellow-50 dark:bg-yellow-950/40',
+    text: 'text-yellow-700 dark:text-yellow-300',
+    border: 'border-yellow-200 dark:border-yellow-800',
   },
   taluk: {
     bg: 'bg-purple-50 dark:bg-purple-950/40',

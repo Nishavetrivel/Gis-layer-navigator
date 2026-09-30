@@ -13,6 +13,7 @@ lands on the same resource, so it is separated here by the shape of the path.
 from core.http import entrypoint
 from core.router import Router
 from handlers.tiles import fmb_tile
+from handlers.tiles import pmtiles_tile
 from handlers.tiles import vector_tile
 from handlers.tiles import tile_metadata
 
@@ -21,6 +22,7 @@ router = Router("tiles_api")
     router
     .get("/api/tiles/{proxy+}", vector_tile.handle)
     .get("/api/fmb-tiles/{proxy+}", fmb_tile.handle)
+    .get("/api/pmtiles/{proxy+}", pmtiles_tile.handle)
 )
 
 # The metadata route shares the /api/tiles/{proxy+} resource, so it is matched

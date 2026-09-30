@@ -25,6 +25,7 @@ from services.spatial_clip_service import (
     _clip_feature_list,
     _collect_village_features_for_clip,
     _parse_clip_geometry,
+    get_cart_layer_features_in_bbox,
 )
 
 #: Aliases the client may use for the two built-in base layers.
@@ -76,13 +77,17 @@ def handle(request: Request) -> Dict[str, Any]:
             if not defn:
                 continue
             uri = find_cart_layer_file(lid)
-            if not uri or not gisfs.exists(uri):
-                continue
-
             geom_type = defn.get("geom_type", "point")
             title = defn.get("name", lid).replace("generic_viewer_", "").replace(" ", "_")
             try:
-                feats = _layer_features(lid, uri)
+                feats = []
+                if minx is not None and miny is not None:
+                    feats = get_cart_layer_features_in_bbox(
+                        lid, minx, miny, maxx, maxy, vector_tile_manager, uri
+                    )
+                if not feats and uri and gisfs.exists(uri):
+                    feats = _layer_features(lid, uri)
+
                 if not feats:
                     continue
                 clipped = _clip_feature_list(feats, clip_geom, geom_type, minx, miny, maxx, maxy)

@@ -48,6 +48,8 @@ Parameters:
     Description: CloudWatch Logs retention for every function.
 
   EnableTileCache:
+
+  
     Type: String
     Default: "true"
     AllowedValues: ["true", "false"]
@@ -219,6 +221,7 @@ Resources:
         - "application/vnd.google-earth.kmz"
         - "application/vnd.google-earth.kml+xml"
         - "application/dxf"
+        - "application/vnd.pmtiles"
         - "*~1*"
       Cors:
         AllowOrigin: !Sub "'${CorsAllowOrigin}'"
@@ -352,6 +355,7 @@ Resources:
       Policies:
         - !Ref GisDataReadPolicy
         - !Ref ArtifactWritePolicy
+        - !Ref PmTilesBucketReadPolicy
       Events:
         VectorTiles:
           Type: Api
@@ -364,6 +368,12 @@ Resources:
           Properties:
             RestApiId: !Ref GisApi
             Path: /api/fmb-tiles/{proxy+}
+            Method: get
+        PmTiles:
+          Type: Api
+          Properties:
+            RestApiId: !Ref GisApi
+            Path: /api/pmtiles/{proxy+}
             Method: get
 
   # /api/spatial/resolve, /api/spatial/viewport
@@ -393,6 +403,12 @@ Resources:
             RestApiId: !Ref GisApi
             Path: /api/spatial/viewport
             Method: get
+        ConvertGpkg:
+          Type: Api
+          Properties:
+            RestApiId: !Ref GisApi
+            Path: /api/spatial/convert-gpkg
+            Method: post
 
   # /api/spatial/clip/preview, /api/spatial/clip/download
   ClipFunction:
@@ -564,6 +580,20 @@ Resources:
           - Effect: Allow
             Action: [s3:ListBucket]
             Resource: !Sub "arn:${AWS::Partition}:s3:::${ArtifactBucket}"
+
+  PmTilesBucketReadPolicy:
+    Type: AWS::IAM::ManagedPolicy
+    Properties:
+      Description: Read-only access to PMTiles archive bucket.
+      PolicyDocument:
+        Version: "2012-10-17"
+        Statement:
+          - Effect: Allow
+            Action: [s3:GetObject, s3:GetObjectVersion]
+            Resource: !Sub "arn:${AWS::Partition}:s3:::gis-layer-nav/*"
+          - Effect: Allow
+            Action: [s3:ListBucket, s3:GetBucketLocation]
+            Resource: !Sub "arn:${AWS::Partition}:s3:::gis-layer-nav"
 
   # ───────────────────────────────────────────────────────────────────────────
   # Log groups — declared so retention is managed rather than never-expiring
